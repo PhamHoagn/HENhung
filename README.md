@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # HIL Robocar Simulation
 
 **Hardware-in-the-Loop (HIL) Robot Car Simulation for Academic Demonstrations**
@@ -354,3 +355,7 @@ If you use this project for your course or research, please give it a star ⭐ a
 ---
 
 **Made with ❤️ for embedded systems education**
+=======
+# Group10_Hệ Nhúng-1-2-25-N02-_2025
+Thiết kế và mô phỏng Robocar 4 bánh tự hành theo lộ trình định trước, tránh vật cản thông minh sử dụng AI nhúng
+>>>>>>> abe4479d0f157db015daf3632ce68e56941ee3b7
