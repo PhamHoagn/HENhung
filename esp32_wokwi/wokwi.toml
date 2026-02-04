@@ -1,0 +1,8 @@
+[wokwi]
+version = 1
+firmware = "sketch.ino"
+elf = ""
+
+# Enable serial port forwarding for Python connection
+[[wokwi.rfc2217]]
+port = 4000

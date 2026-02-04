@@ -1,0 +1,9 @@
+# HIL Robocar Simulation - Python Dependencies
+# Python 3.10+ required
+
+# Core dependencies
+pygame>=2.5.0
+pyserial>=3.5
+pyyaml>=6.0
+
+# Optional but recommended
