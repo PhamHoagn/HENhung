@@ -118,13 +118,18 @@ class SerialBridge:
         self,
         distance_front: float,
         distance_left: float,
-        distance_right: float
+        distance_right: float,
+        waypoint_x: Optional[float] = None,
+        waypoint_y: Optional[float] = None,
+        car_heading: Optional[float] = None
     ) -> bool:
         """
-        Send sensor data to ESP32
+        Send sensor data (and optionally waypoint info) to ESP32
         
         Args:
             distance_front, distance_left, distance_right: Distances in meters
+            waypoint_x, waypoint_y: Target waypoint coordinates (optional)
+            car_heading: Car heading in radians (optional)
         
         Returns:
             True if sent successfully
@@ -133,10 +138,18 @@ class SerialBridge:
             return False
         
         try:
-            # Encode sensor data as JSON
-            json_str = self.protocol.encode_sensor_data(
-                distance_front, distance_left, distance_right
-            )
+            # Encode sensor data as JSON (with or without waypoint)
+            if waypoint_x is not None and waypoint_y is not None and car_heading is not None:
+                # Enhanced message with waypoint
+                json_str = self.protocol.encode_sensor_data_with_waypoint(
+                    distance_front, distance_left, distance_right,
+                    waypoint_x, waypoint_y, car_heading
+                )
+            else:
+                # Basic sensor data only
+                json_str = self.protocol.encode_sensor_data(
+                    distance_front, distance_left, distance_right
+                )
             
             # Send to ESP32
             data_bytes = json_str.encode('utf-8')

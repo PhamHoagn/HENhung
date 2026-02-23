@@ -1,0 +1,41 @@
+# Demo Waypoint Navigation - Square Path
+# Xe sẽ đi theo lộ trình hình vuông và tự động né vật cản
+
+name: "Square Waypoint Navigation"
+description: "Robot follows square path waypoints while avoiding obstacles"
+
+# Waypoints (x, y) in meters
+waypoints:
+  - [2.0, 2.0]   # Point 1 - Bottom left
+  - [6.0, 2.0]   # Point 2 - Bottom right  
+  - [6.0, 6.0]   # Point 3 - Top right
+  - [2.0, 6.0]   # Point 4 - Top left
+  - [2.0, 2.0]   # Point 5 - Back to start
+
+# Waypoint settings
+waypoint_radius: 0.3  # meters - radius to consider waypoint reached
+loop_waypoints: true   # Loop back to first waypoint when done
+
+# Car starting position
+car_start_x: 2.0
+car_start_y: 2.0
+car_start_heading: 0.0  # degrees (0 = right, 90 = up)
+
+# Obstacles
+obstacles:
+  - type: "box"
+    x: 4.0
+    y: 4.0
+    width: 1.0
+    height: 1.0
+    
+  - type: "circle"
+    x: 3.5
+    y: 5.5
+    radius: 0.4
+    
+  - type: "box"
+    x: 5.5
+    y: 3.0
+    width: 0.8
+    height: 0.8

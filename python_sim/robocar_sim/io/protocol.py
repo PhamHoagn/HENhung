@@ -41,6 +41,36 @@ class SerialProtocol:
         return json.dumps(data) + "\n"
     
     @staticmethod
+    def encode_sensor_data_with_waypoint(
+        distance_front: float,
+        distance_left: float,
+        distance_right: float,
+        waypoint_x: float,
+        waypoint_y: float,
+        car_heading: float
+    ) -> str:
+        """
+        Encode sensor data + waypoint info for ESP32
+        
+        Args:
+            distance_front, distance_left, distance_right: Sensor distances (m)
+            waypoint_x, waypoint_y: Target waypoint coordinates (m)
+            car_heading: Current car heading (radians)
+        
+        Returns:
+            JSON string with newline terminator
+        """
+        data = {
+            "dF": round(distance_front, 2),
+            "dL": round(distance_left, 2),
+            "dR": round(distance_right, 2),
+            "wx": round(waypoint_x, 2),
+            "wy": round(waypoint_y, 2),
+            "h": round(car_heading, 3)
+        }
+        return json.dumps(data) + "\n"
+    
+    @staticmethod
     def decode_motor_commands(json_str: str) -> Optional[Tuple[float, float]]:
         """
         Decode motor commands received from ESP32

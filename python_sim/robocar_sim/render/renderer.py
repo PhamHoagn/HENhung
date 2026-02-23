@@ -102,7 +102,9 @@ class SimulationRenderer:
         obstacles: List,
         sensor_rays: Tuple,
         is_collision: bool = False,
-        telemetry: Optional[dict] = None
+        telemetry: Optional[dict] = None,
+        waypoints: Optional[List[Tuple[float, float]]] = None,
+        current_waypoint_index: int = 0
     ):
         """
         Render a complete frame
@@ -114,12 +116,18 @@ class SimulationRenderer:
             sensor_rays: Tuple of (ray_front, ray_left, ray_right)
             is_collision: Whether car is in collision
             telemetry: Optional telemetry data for HUD
+            waypoints: List of waypoint positions [(x,y), ...]
+            current_waypoint_index: Index of current target waypoint
         """
         # Clear screen
         self.screen.fill(Colors.DARK_GRAY)
         
         # Draw grid
         self._draw_grid()
+        
+        # Draw waypoints and path (BEFORE obstacles so they're behind)
+        if waypoints and len(waypoints) > 0:
+            self._draw_waypoints(waypoints, current_waypoint_index, car_pos)
         
         # Draw obstacles
         self._draw_obstacles(obstacles)
@@ -132,7 +140,7 @@ class SimulationRenderer:
         
         # Draw HUD
         if telemetry:
-            self._draw_hud(telemetry)
+            self._draw_hud(telemetry, waypoints, current_waypoint_index)
         
         # Update display
         pygame.display.flip()
@@ -241,6 +249,116 @@ class SimulationRenderer:
                 2
             )
     
+    def _draw_waypoints(self, waypoints: List[Tuple[float, float]], 
+                       current_index: int, car_pos: Tuple[float, float]):
+        """
+        Vẽ waypoints và đường đi
+        
+        Args:
+            waypoints: List of (x, y) waypoint positions
+            current_index: Index of current target waypoint
+            car_pos: Current car position (x, y)
+        """
+        if not waypoints or len(waypoints) == 0:
+            return
+        
+        # 1. Vẽ đường nối giữa các waypoints (lộ trình)
+        if len(waypoints) > 1:
+            for i in range(len(waypoints) - 1):
+                start_pos = self.world_to_screen(waypoints[i][0], waypoints[i][1])
+                end_pos = self.world_to_screen(waypoints[i+1][0], waypoints[i+1][1])
+                
+                # Đường đi đã qua (màu xám)
+                if i < current_index:
+                    pygame.draw.line(self.screen, Colors.GRAY, start_pos, end_pos, 3)
+                # Đường đi sắp tới (màu xanh lá)
+                else:
+                    pygame.draw.line(self.screen, Colors.GREEN, start_pos, end_pos, 3)
+        
+        # 2. Vẽ đường từ xe đến waypoint hiện tại (màu vàng nét đứt)
+        if current_index < len(waypoints):
+            car_screen = self.world_to_screen(car_pos[0], car_pos[1])
+            wp_screen = self.world_to_screen(waypoints[current_index][0], 
+                                            waypoints[current_index][1])
+            
+            # Vẽ nét đứt
+            self._draw_dashed_line(car_screen, wp_screen, Colors.YELLOW, 2, 10)
+        
+        # 3. Vẽ các waypoints
+        for i, wp in enumerate(waypoints):
+            screen_pos = self.world_to_screen(wp[0], wp[1])
+            
+            if i < current_index:
+                # Waypoints đã đi qua - hình vuông nhỏ màu xám
+                size = 8
+                rect = pygame.Rect(screen_pos[0] - size//2, screen_pos[1] - size//2, 
+                                  size, size)
+                pygame.draw.rect(self.screen, Colors.GRAY, rect, 2)
+                
+            elif i == current_index:
+                # Waypoint hiện tại (ĐÍCH) - hình tròn lớn màu vàng, nhấp nháy
+                radius = 15
+                # Vẽ viền ngoài lớn
+                pygame.draw.circle(self.screen, Colors.YELLOW, screen_pos, radius, 3)
+                # Vẽ viền trong
+                pygame.draw.circle(self.screen, Colors.YELLOW, screen_pos, radius - 5, 2)
+                # Vẽ chữ "ĐÍCH"
+                text = self.font_medium.render("ĐÍCH", True, Colors.YELLOW)
+                text_rect = text.get_rect(center=(screen_pos[0], screen_pos[1] - 30))
+                # Nền đen cho chữ
+                bg_rect = text_rect.inflate(10, 5)
+                pygame.draw.rect(self.screen, Colors.BLACK, bg_rect)
+                pygame.draw.rect(self.screen, Colors.YELLOW, bg_rect, 2)
+                self.screen.blit(text, text_rect)
+                
+            else:
+                # Waypoints sắp tới - hình tròn màu xanh lá
+                radius = 12
+                pygame.draw.circle(self.screen, Colors.GREEN, screen_pos, radius, 0)
+                pygame.draw.circle(self.screen, Colors.WHITE, screen_pos, radius, 2)
+                
+            # Số thứ tự waypoint
+            if i != current_index:  # Không vẽ số cho waypoint hiện tại (đã có chữ ĐÍCH)
+                num_text = self.font_small.render(str(i + 1), True, Colors.WHITE)
+                num_rect = num_text.get_rect(center=screen_pos)
+                self.screen.blit(num_text, num_rect)
+    
+    def _draw_dashed_line(self, start, end, color, width, dash_length):
+        """Vẽ đường nét đứt"""
+        x1, y1 = start
+        x2, y2 = end
+        
+        # Tính toán độ dài và hướng
+        dx = x2 - x1
+        dy = y2 - y1
+        distance = math.sqrt(dx**2 + dy**2)
+        
+        if distance == 0:
+            return
+        
+        # Normalize direction
+        dx /= distance
+        dy /= distance
+        
+        # Vẽ các đoạn nét đứt
+        current_length = 0
+        while current_length < distance:
+            # Điểm bắt đầu đoạn
+            start_x = x1 + dx * current_length
+            start_y = y1 + dy * current_length
+            
+            # Điểm kết thúc đoạn
+            end_length = min(current_length + dash_length, distance)
+            end_x = x1 + dx * end_length
+            end_y = y1 + dy * end_length
+            
+            pygame.draw.line(self.screen, color, 
+                           (int(start_x), int(start_y)), 
+                           (int(end_x), int(end_y)), width)
+            
+            # Nhảy qua khoảng trống
+            current_length += dash_length * 2
+    
     def _draw_sensor_rays(self, sensor_rays: Tuple):
         """Draw sensor rays color-coded by distance"""
         ray_front, ray_left, ray_right = sensor_rays
@@ -281,15 +399,17 @@ class SimulationRenderer:
                     0
                 )
     
-    def _draw_hud(self, telemetry: dict):
+    def _draw_hud(self, telemetry: dict, 
+                  waypoints: Optional[List[Tuple[float, float]]] = None,
+                  current_waypoint_index: int = 0):
         """Draw heads-up display with telemetry"""
         hud_x = 10
         hud_y = 10
         line_height = 20
         
         # Semi-transparent background
-        hud_width = 300
-        hud_height = 200
+        hud_width = 320
+        hud_height = 280 if waypoints else 200
         hud_surface = pygame.Surface((hud_width, hud_height))
         hud_surface.set_alpha(200)
         hud_surface.fill(Colors.BLACK)
@@ -298,7 +418,7 @@ class SimulationRenderer:
         # Render text lines
         lines = [
             f"HIL ROBOCAR SIMULATION",
-            f"─────────────────────────",
+            f"─────────────────────────────",
             f"FPS: {self.actual_fps:.1f}",
             f"Time: {telemetry.get('time', 0.0):.1f}s",
             f"",
@@ -311,9 +431,27 @@ class SimulationRenderer:
             f"  Right: {telemetry.get('dR', 0):.2f}",
         ]
         
+        # Add waypoint info if available
+        if waypoints and len(waypoints) > 0:
+            lines.append("")
+            lines.append("═══ WAYPOINT NAVIGATION ═══")
+            lines.append(f"Điểm hiện tại: {current_waypoint_index + 1}/{len(waypoints)}")
+            
+            if current_waypoint_index < len(waypoints):
+                wp = waypoints[current_waypoint_index]
+                lines.append(f"Đích: ({wp[0]:.1f}, {wp[1]:.1f})")
+                
+                # Tính khoảng cách đến đích
+                car_x = telemetry.get('x', 0)
+                car_y = telemetry.get('y', 0)
+                dist = math.sqrt((wp[0] - car_x)**2 + (wp[1] - car_y)**2)
+                lines.append(f"Khoảng cách: {dist:.2f}m")
+        
         for i, line in enumerate(lines):
             if i == 0:
                 text_surface = self.font_medium.render(line, True, Colors.YELLOW)
+            elif "═══" in line:
+                text_surface = self.font_small.render(line, True, Colors.GREEN)
             else:
                 text_surface = self.font_small.render(line, True, Colors.WHITE)
             
