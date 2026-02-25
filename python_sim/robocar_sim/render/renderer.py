@@ -80,6 +80,19 @@ class SimulationRenderer:
         
         # Runtime state
         self.running = True
+        self.button_actions = {
+            'toggle_start': False,
+            'reset': False,
+            'toggle_waypoint_mode': False,
+            'add_waypoint': None,
+        }
+
+        # UI button layout
+        self.button_rects = {
+            'toggle_start': pygame.Rect(10, window_height - 115, 110, 32),
+            'reset': pygame.Rect(130, window_height - 115, 100, 32),
+            'toggle_waypoint_mode': pygame.Rect(240, window_height - 115, 170, 32),
+        }
     
     def world_to_screen(self, x: float, y: float) -> Tuple[int, int]:
         """
@@ -104,7 +117,9 @@ class SimulationRenderer:
         is_collision: bool = False,
         telemetry: Optional[dict] = None,
         waypoints: Optional[List[Tuple[float, float]]] = None,
-        current_waypoint_index: int = 0
+        current_waypoint_index: int = 0,
+        simulation_running: bool = True,
+        waypoint_edit_mode: bool = False,
     ):
         """
         Render a complete frame
@@ -141,6 +156,8 @@ class SimulationRenderer:
         # Draw HUD
         if telemetry:
             self._draw_hud(telemetry, waypoints, current_waypoint_index)
+
+        self._draw_control_panel(simulation_running, waypoint_edit_mode)
         
         # Update display
         pygame.display.flip()
@@ -185,41 +202,58 @@ class SimulationRenderer:
         heading: float,
         is_collision: bool
     ):
-        """Draw robot car with heading indicator"""
+        """Draw a 4-wheel car with heading indicator"""
         screen_pos = self.world_to_screen(pos[0], pos[1])
-        
-        # Car body (circle)
-        car_radius_pixels = int(0.15 * self.scale_x)  # 15cm robot radius
+        car_length = int(0.34 * self.scale_x)
+        car_width = int(0.2 * self.scale_x)
+        wheel_length = max(8, int(car_length * 0.24))
+        wheel_width = max(4, int(car_width * 0.24))
         car_color = Colors.RED if is_collision else Colors.BLUE
-        
-        pygame.draw.circle(
-            self.screen,
-            car_color,
-            screen_pos,
-            car_radius_pixels,
-            0  # Filled
-        )
-        
-        # Heading indicator (line from center)
-        indicator_length = car_radius_pixels * 1.5
+
+        def transform(local_x: float, local_y: float) -> Tuple[int, int]:
+            cos_h = math.cos(heading)
+            sin_h = math.sin(heading)
+            world_x = screen_pos[0] + local_x * cos_h - local_y * sin_h
+            world_y = screen_pos[1] - (local_x * sin_h + local_y * cos_h)
+            return int(world_x), int(world_y)
+
+        # Main body polygon
+        body_points = [
+            transform(car_length / 2, car_width / 2),
+            transform(car_length / 2, -car_width / 2),
+            transform(-car_length / 2, -car_width / 2),
+            transform(-car_length / 2, car_width / 2),
+        ]
+        pygame.draw.polygon(self.screen, car_color, body_points)
+        pygame.draw.polygon(self.screen, Colors.WHITE, body_points, 2)
+
+        # Wheel polygons (4 wheels)
+        wheel_offsets = [
+            (car_length * 0.28, car_width * 0.58),
+            (car_length * 0.28, -car_width * 0.58),
+            (-car_length * 0.28, car_width * 0.58),
+            (-car_length * 0.28, -car_width * 0.58),
+        ]
+        for cx, cy in wheel_offsets:
+            wheel_poly = [
+                transform(cx + wheel_length / 2, cy + wheel_width / 2),
+                transform(cx + wheel_length / 2, cy - wheel_width / 2),
+                transform(cx - wheel_length / 2, cy - wheel_width / 2),
+                transform(cx - wheel_length / 2, cy + wheel_width / 2),
+            ]
+            pygame.draw.polygon(self.screen, Colors.BLACK, wheel_poly)
+            pygame.draw.polygon(self.screen, Colors.LIGHT_GRAY, wheel_poly, 1)
+
+        # Heading indicator
+        indicator_length = car_length * 0.65
         end_x = screen_pos[0] + indicator_length * math.cos(heading)
-        end_y = screen_pos[1] - indicator_length * math.sin(heading)  # Flip Y
-        
+        end_y = screen_pos[1] - indicator_length * math.sin(heading)
         pygame.draw.line(
             self.screen,
             Colors.YELLOW,
             screen_pos,
             (int(end_x), int(end_y)),
             3
-        )
-        
-        # Car outline
-        pygame.draw.circle(
-            self.screen,
-            Colors.WHITE,
-            screen_pos,
-            car_radius_pixels,
-            2  # Outline only
         )
     
     def _draw_obstacles(self, obstacles: List):
@@ -409,7 +443,7 @@ class SimulationRenderer:
         
         # Semi-transparent background
         hud_width = 320
-        hud_height = 280 if waypoints else 200
+        hud_height = 320 if waypoints else 240
         hud_surface = pygame.Surface((hud_width, hud_height))
         hud_surface.set_alpha(200)
         hud_surface.fill(Colors.BLACK)
@@ -446,6 +480,9 @@ class SimulationRenderer:
                 car_y = telemetry.get('y', 0)
                 dist = math.sqrt((wp[0] - car_x)**2 + (wp[1] - car_y)**2)
                 lines.append(f"Khoảng cách: {dist:.2f}m")
+
+        lines.append("")
+        lines.append("Phím tắt: SPACE(start/pause), R(reset), M(set waypoint)")
         
         for i, line in enumerate(lines):
             if i == 0:
@@ -468,6 +505,46 @@ class SimulationRenderer:
             status_color
         )
         self.screen.blit(status_surface, (hud_x + 10, self.window_height - 30))
+
+    def _draw_control_panel(self, simulation_running: bool, waypoint_edit_mode: bool):
+        """Draw bottom control buttons."""
+        for action, rect in self.button_rects.items():
+            if action == 'toggle_start':
+                label = 'Pause' if simulation_running else 'Start'
+                color = (80, 170, 80) if not simulation_running else (180, 140, 60)
+            elif action == 'reset':
+                label = 'Reset'
+                color = (180, 80, 80)
+            else:
+                label = 'Set Waypoint'
+                color = (90, 120, 190) if not waypoint_edit_mode else (210, 170, 70)
+
+            pygame.draw.rect(self.screen, color, rect, border_radius=6)
+            pygame.draw.rect(self.screen, Colors.WHITE, rect, 2, border_radius=6)
+            text = self.font_small.render(label, True, Colors.WHITE)
+            text_rect = text.get_rect(center=rect.center)
+            self.screen.blit(text, text_rect)
+
+        if waypoint_edit_mode:
+            hint = self.font_small.render(
+                "Waypoint mode: click map to add point", True, Colors.YELLOW
+            )
+            self.screen.blit(hint, (10, self.window_height - 74))
+
+    def _screen_to_world(self, x: int, y: int) -> Tuple[float, float]:
+        world_x = x / self.scale_x
+        world_y = (self.window_height - y) / self.scale_y
+        return world_x, world_y
+
+    def consume_actions(self) -> dict:
+        actions = self.button_actions.copy()
+        self.button_actions = {
+            'toggle_start': False,
+            'reset': False,
+            'toggle_waypoint_mode': False,
+            'add_waypoint': None,
+        }
+        return actions
     
     def handle_events(self) -> bool:
         """
@@ -487,9 +564,21 @@ class SimulationRenderer:
                     return False
                 
                 elif event.key == pygame.K_r:
-                    # Reset signal (handled by main loop)
-                    pass
-        
+                    self.button_actions['reset'] = True
+                elif event.key == pygame.K_SPACE:
+                    self.button_actions['toggle_start'] = True
+                elif event.key == pygame.K_m:
+                    self.button_actions['toggle_waypoint_mode'] = True
+
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                x, y = event.pos
+                for action, rect in self.button_rects.items():
+                    if rect.collidepoint(x, y):
+                        self.button_actions[action] = True
+                        break
+                else:
+                    self.button_actions['add_waypoint'] = self._screen_to_world(x, y)
+
         return True
     
     def close(self):

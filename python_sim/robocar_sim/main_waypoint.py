@@ -11,6 +11,7 @@ from typing import Optional, List, Tuple
 
 from .sim.world import SimulationWorld
 from .sim.waypoints import WaypointNavigator
+from .sim.autopilot import WaypointAutopilot
 from .render.renderer import SimulationRenderer
 from .io.serial_bridge import SerialBridge
 
@@ -122,10 +123,12 @@ class HILRobocarWaypointSimulation:
         
         # Runtime state
         self.running = True
-        self.paused = False
+        self.simulation_running = True
+        self.waypoint_edit_mode = False
         self.simulation_time = 0.0
         self.frame_count = 0
         self.start_pos = (car_x, car_y, car_heading)
+        self.autopilot = WaypointAutopilot(max_speed=0.8)
         
         print("\n" + "═" * 60)
         print("  ✓ WAYPOINT NAVIGATION READY")
@@ -145,6 +148,16 @@ class HILRobocarWaypointSimulation:
                 if not self.renderer.handle_events():
                     self.running = False
                     break
+
+                actions = self.renderer.consume_actions()
+                if actions.get('toggle_start'):
+                    self.simulation_running = not self.simulation_running
+                if actions.get('reset'):
+                    self._reset_simulation()
+                if actions.get('toggle_waypoint_mode'):
+                    self.waypoint_edit_mode = not self.waypoint_edit_mode
+                if self.waypoint_edit_mode and actions.get('add_waypoint'):
+                    self._add_waypoint(actions['add_waypoint'])
                 
                 # Time step
                 current_time = time.time()
@@ -190,6 +203,15 @@ class HILRobocarWaypointSimulation:
                 motor_commands = None
                 if self.serial and self.serial.is_connected:
                     motor_commands = self.serial.receive_motor_commands()
+
+                # Fallback autopilot if serial is not connected
+                if motor_commands is None:
+                    current_wp = None
+                    if self.waypoint_navigator:
+                        current_wp = self.waypoint_navigator.get_current_waypoint()
+                    motor_commands = self.autopilot.compute_commands(
+                        (car_x, car_y), car_heading, current_wp, sensor_data
+                    )
                 
                 # Apply commands
                 if motor_commands:
@@ -199,7 +221,7 @@ class HILRobocarWaypointSimulation:
                     self.world.set_motor_commands(0.0, 0.0)
                 
                 # Update physics
-                if not self.paused:
+                if self.simulation_running:
                     self.world.update(dt)
                     self.simulation_time += dt
                 
@@ -231,7 +253,9 @@ class HILRobocarWaypointSimulation:
                     is_collision=self.world.is_crashed(),
                     telemetry=telemetry,
                     waypoints=waypoints_list,
-                    current_waypoint_index=current_wp_idx
+                    current_waypoint_index=current_wp_idx,
+                    simulation_running=self.simulation_running,
+                    waypoint_edit_mode=self.waypoint_edit_mode
                 )
                 
                 # Collision detection
@@ -240,6 +264,7 @@ class HILRobocarWaypointSimulation:
                     self.world.reset(*self.start_pos)
                     if self.waypoint_navigator:
                         self.waypoint_navigator.reset()
+                    self.autopilot.reset()
                     print("  ✓ Reset\n")
                 
                 self.frame_count += 1
@@ -278,6 +303,28 @@ class HILRobocarWaypointSimulation:
         
         print("\n✓ Đã thoát")
         print("═" * 60 + "\n")
+
+    def _reset_simulation(self):
+        """Reset state to starting pose and restart waypoint loop."""
+        self.world.reset(*self.start_pos)
+        if self.waypoint_navigator:
+            self.waypoint_navigator.reset()
+        self.autopilot.reset()
+        self.simulation_time = 0.0
+
+    def _add_waypoint(self, waypoint: Tuple[float, float]):
+        """Append waypoint from UI click and keep within world bounds."""
+        wx = min(max(0.2, waypoint[0]), self.world.width - 0.2)
+        wy = min(max(0.2, waypoint[1]), self.world.height - 0.2)
+
+        if self.waypoint_navigator is None:
+            self.waypoint_navigator = WaypointNavigator(
+                waypoints=[(wx, wy)],
+                reach_radius=0.3,
+                loop=True,
+            )
+        else:
+            self.waypoint_navigator.waypoints.append((wx, wy))
 
 
 def main_waypoint():
