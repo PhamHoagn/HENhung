@@ -32,7 +32,7 @@ class DifferentialDriveCar:
         y: float = 2.0,
         theta: float = 0.0,
         wheel_base: float = 0.15,      # Distance between wheels (m)
-        max_speed: float = 1.0,        # Maximum wheel speed (m/s)
+        max_speed: float = 0.6,        # Maximum wheel speed (m/s) - reduced for safety
         wheel_radius: float = 0.033,   # Wheel radius (m)
     ):
         """

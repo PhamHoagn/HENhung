@@ -116,20 +116,31 @@ class SerialBridge:
     
     def send_sensor_data(
         self,
-        distance_front: float,
-        distance_left: float,
-        distance_right: float,
+        d_center: float,
+        d_left_near: float,
+        d_right_near: float,
+        d_left_mid: float,
+        d_right_mid: float,
+        d_left_far: float,
+        d_right_far: float,
+        d_left_side: float,
+        d_right_side: float,
         waypoint_x: Optional[float] = None,
         waypoint_y: Optional[float] = None,
-        car_heading: Optional[float] = None
+        car_heading: Optional[float] = None,
+        car_x: Optional[float] = None,
+        car_y: Optional[float] = None
     ) -> bool:
         """
-        Send sensor data (and optionally waypoint info) to ESP32
+        Send sensor data (9 sensors: 7 forward + 2 side) and optionally waypoint + position info to ESP32
         
         Args:
-            distance_front, distance_left, distance_right: Distances in meters
+            d_center, d_left_near, d_right_near, d_left_mid, d_right_mid, 
+            d_left_far, d_right_far: Forward cone sensor distances in meters
+            d_left_side, d_right_side: Side sensor (±90°) distances in meters
             waypoint_x, waypoint_y: Target waypoint coordinates (optional)
             car_heading: Car heading in radians (optional)
+            car_x, car_y: Car position in meters (optional)
         
         Returns:
             True if sent successfully
@@ -140,15 +151,19 @@ class SerialBridge:
         try:
             # Encode sensor data as JSON (with or without waypoint)
             if waypoint_x is not None and waypoint_y is not None and car_heading is not None:
-                # Enhanced message with waypoint
+                # Enhanced message with waypoint and position
                 json_str = self.protocol.encode_sensor_data_with_waypoint(
-                    distance_front, distance_left, distance_right,
-                    waypoint_x, waypoint_y, car_heading
+                    d_center, d_left_near, d_right_near, d_left_mid, d_right_mid,
+                    d_left_far, d_right_far, d_left_side, d_right_side,
+                    waypoint_x, waypoint_y, car_heading,
+                    car_x if car_x is not None else 0.0,
+                    car_y if car_y is not None else 0.0
                 )
             else:
                 # Basic sensor data only
                 json_str = self.protocol.encode_sensor_data(
-                    distance_front, distance_left, distance_right
+                    d_center, d_left_near, d_right_near, d_left_mid, d_right_mid,
+                    d_left_far, d_right_far, d_left_side, d_right_side
                 )
             
             # Send to ESP32

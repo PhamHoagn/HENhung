@@ -85,13 +85,29 @@ class SimulationRenderer:
             'reset': False,
             'toggle_waypoint_mode': False,
             'add_waypoint': None,
+            'delete_last_waypoint': False,
+            'clear_waypoints': False,
+            'move_waypoint': None,
+            'select_waypoint': None,
         }
+        
+        # Waypoint editing state
+        self.selected_waypoint_index = None
+        self.moving_waypoint_mode = False
+        self.current_waypoints = None  # Cache for click detection
 
-        # UI button layout
+        # UI button layout - 2 rows
+        button_y_top = window_height - 145
+        button_y_bottom = window_height - 110
+        
         self.button_rects = {
-            'toggle_start': pygame.Rect(10, window_height - 115, 110, 32),
-            'reset': pygame.Rect(130, window_height - 115, 100, 32),
-            'toggle_waypoint_mode': pygame.Rect(240, window_height - 115, 170, 32),
+            # Top row
+            'toggle_start': pygame.Rect(10, button_y_top, 110, 30),
+            'reset': pygame.Rect(130, button_y_top, 100, 30),
+            'toggle_waypoint_mode': pygame.Rect(240, button_y_top, 150, 30),
+            # Bottom row (waypoint controls)
+            'delete_last_waypoint': pygame.Rect(10, button_y_bottom, 120, 30),
+            'clear_waypoints': pygame.Rect(140, button_y_bottom, 110, 30),
         }
     
     def world_to_screen(self, x: float, y: float) -> Tuple[int, int]:
@@ -128,12 +144,15 @@ class SimulationRenderer:
             car_pos: Car position (x, y) in meters
             car_heading: Car heading in radians
             obstacles: List of Obstacle objects
-            sensor_rays: Tuple of (ray_front, ray_left, ray_right)
+            sensor_rays: Tuple of 7 rays (center, L-near, R-near, L-mid, R-mid, L-far, R-far)
             is_collision: Whether car is in collision
             telemetry: Optional telemetry data for HUD
             waypoints: List of waypoint positions [(x,y), ...]
             current_waypoint_index: Index of current target waypoint
         """
+        # Cache waypoints for click detection
+        self.current_waypoints = waypoints
+        
         # Clear screen
         self.screen.fill(Colors.DARK_GRAY)
         
@@ -322,16 +341,20 @@ class SimulationRenderer:
         for i, wp in enumerate(waypoints):
             screen_pos = self.world_to_screen(wp[0], wp[1])
             
+            # Highlight selected waypoint
+            is_selected = (i == self.selected_waypoint_index)
+            
             if i < current_index:
                 # Waypoints đã đi qua - hình vuông nhỏ màu xám
-                size = 8
+                size = 10 if is_selected else 8
                 rect = pygame.Rect(screen_pos[0] - size//2, screen_pos[1] - size//2, 
                                   size, size)
-                pygame.draw.rect(self.screen, Colors.GRAY, rect, 2)
+                color = Colors.ORANGE if is_selected else Colors.GRAY
+                pygame.draw.rect(self.screen, color, rect, 3 if is_selected else 2)
                 
             elif i == current_index:
-                # Waypoint hiện tại (ĐÍCH) - hình tròn lớn màu vàng, nhấp nháy
-                radius = 15
+                # Waypoint hiện tại (ĐÍCH) - hình tròn lớn màu vàng
+                radius = 18 if is_selected else 15
                 # Vẽ viền ngoài lớn
                 pygame.draw.circle(self.screen, Colors.YELLOW, screen_pos, radius, 3)
                 # Vẽ viền trong
@@ -347,9 +370,10 @@ class SimulationRenderer:
                 
             else:
                 # Waypoints sắp tới - hình tròn màu xanh lá
-                radius = 12
-                pygame.draw.circle(self.screen, Colors.GREEN, screen_pos, radius, 0)
-                pygame.draw.circle(self.screen, Colors.WHITE, screen_pos, radius, 2)
+                radius = 15 if is_selected else 12
+                color = Colors.ORANGE if is_selected else Colors.GREEN
+                pygame.draw.circle(self.screen, color, screen_pos, radius, 0)
+                pygame.draw.circle(self.screen, Colors.WHITE, screen_pos, radius, 3 if is_selected else 2)
                 
             # Số thứ tự waypoint
             if i != current_index:  # Không vẽ số cho waypoint hiện tại (đã có chữ ĐÍCH)
@@ -394,8 +418,8 @@ class SimulationRenderer:
             current_length += dash_length * 2
     
     def _draw_sensor_rays(self, sensor_rays: Tuple):
-        """Draw sensor rays color-coded by distance"""
-        ray_front, ray_left, ray_right = sensor_rays
+        """Draw 9 sensor rays: 7 forward cone + 2 side, color-coded by distance"""
+        ray_center, ray_left_near, ray_right_near, ray_left_mid, ray_right_mid, ray_left_far, ray_right_far, ray_left_side, ray_right_side = sensor_rays
         
         # Define colors based on distance thresholds
         def get_ray_color(distance: float) -> Tuple[int, int, int]:
@@ -403,11 +427,25 @@ class SimulationRenderer:
                 return Colors.RED      # Danger
             elif distance < 0.6:
                 return Colors.ORANGE   # Warning
+            elif distance < 1.0:
+                return Colors.YELLOW   # Caution
             else:
                 return Colors.GREEN    # Safe
         
-        # Draw each ray
-        for ray in [ray_front, ray_left, ray_right]:
+        # Draw each ray (center is brightest/thickest, width decreases with angle)
+        rays_with_width = [
+            (ray_center, 3),          # Center - thickest
+            (ray_left_near, 2),       # Near sensors
+            (ray_right_near, 2),
+            (ray_left_mid, 2),        # Mid sensors
+            (ray_right_mid, 2),
+            (ray_left_far, 1),        # Far sensors - thinnest
+            (ray_right_far, 1),
+            (ray_left_side, 2),       # Side sensors - medium
+            (ray_right_side, 2)
+        ]
+        
+        for ray, width in rays_with_width:
             if ray.hit_point:
                 # Ray origin to hit point
                 start_pos = self.world_to_screen(ray.origin[0], ray.origin[1])
@@ -421,15 +459,16 @@ class SimulationRenderer:
                     ray_color,
                     start_pos,
                     end_pos,
-                    2
+                    width
                 )
                 
-                # Draw hit point
+                # Draw hit point (smaller for far sensors)
+                point_radius = 4 if width == 3 else (3 if width == 2 else 2)
                 pygame.draw.circle(
                     self.screen,
                     ray_color,
                     end_pos,
-                    4,
+                    point_radius,
                     0
                 )
     
@@ -439,72 +478,112 @@ class SimulationRenderer:
         """Draw heads-up display with telemetry"""
         hud_x = 10
         hud_y = 10
-        line_height = 20
+        line_height = 18
         
-        # Semi-transparent background
-        hud_width = 320
-        hud_height = 320 if waypoints else 240
-        hud_surface = pygame.Surface((hud_width, hud_height))
-        hud_surface.set_alpha(200)
-        hud_surface.fill(Colors.BLACK)
+        # Semi-transparent background with rounded corners
+        hud_width = 340
+        hud_height = 340 if waypoints else 260  # Increased for 9 sensors
+        hud_surface = pygame.Surface((hud_width, hud_height), pygame.SRCALPHA)
+        pygame.draw.rect(hud_surface, (0, 0, 0, 220), (0, 0, hud_width, hud_height), border_radius=10)
+        pygame.draw.rect(hud_surface, (100, 100, 100, 180), (0, 0, hud_width, hud_height), 2, border_radius=10)
         self.screen.blit(hud_surface, (hud_x, hud_y))
         
-        # Render text lines
+        # Render text lines with improved formatting
+        dC = telemetry.get('dC', 0)       # Center
+        dLN = telemetry.get('dLN', 0)     # Left near 15°
+        dRN = telemetry.get('dRN', 0)     # Right near 15°
+        dLM = telemetry.get('dLM', 0)     # Left mid 35°
+        dRM = telemetry.get('dRM', 0)     # Right mid 35°
+        dLF = telemetry.get('dLF', 0)     # Left far 60°
+        dRF = telemetry.get('dRF', 0)     # Right far 60°
+        dLS = telemetry.get('dLS', 0)     # Left side 90°
+        dRS = telemetry.get('dRS', 0)     # Right side 90°
+        
         lines = [
-            f"HIL ROBOCAR SIMULATION",
-            f"─────────────────────────────",
-            f"FPS: {self.actual_fps:.1f}",
-            f"Time: {telemetry.get('time', 0.0):.1f}s",
-            f"",
-            f"Position: ({telemetry.get('x', 0):.2f}, {telemetry.get('y', 0):.2f})",
-            f"Heading: {math.degrees(telemetry.get('heading', 0)):.1f}°",
-            f"",
-            f"Sensors (m):",
-            f"  Front: {telemetry.get('dF', 0):.2f}",
-            f"  Left:  {telemetry.get('dL', 0):.2f}",
-            f"  Right: {telemetry.get('dR', 0):.2f}",
+            ("🚗 HIL ROBOCAR", Colors.YELLOW, True),
+            ("", Colors.WHITE, False),
+            (f"⏱ Time: {telemetry.get('time', 0.0):.1f}s | FPS: {self.actual_fps:.0f}", Colors.WHITE, False),
+            (f"📍 Pos: ({telemetry.get('x', 0):.2f}, {telemetry.get('y', 0):.2f})m", Colors.WHITE, False),
+            (f"🧭 Head: {math.degrees(telemetry.get('heading', 0)):.0f}°", Colors.WHITE, False),
+            ("", Colors.WHITE, False),
+            ("🔍 SENSORS (7 FWD + 2 SIDE):", Colors.BLUE, False),
         ]
+        
+        # Color-coded sensor readings
+        def get_sensor_color(distance):
+            if distance < 0.3:
+                return Colors.RED
+            elif distance < 0.5:
+                return Colors.ORANGE
+            elif distance < 0.8:
+                return Colors.YELLOW
+            else:
+                return Colors.GREEN
+        
+        lines.append((f"  ⬆  Center:       {dC:.2f}m", get_sensor_color(dC), False))
+        lines.append((f"  ↖  L-Near(15°):  {dLN:.2f}m", get_sensor_color(dLN), False))
+        lines.append((f"  ↗  R-Near(15°):  {dRN:.2f}m", get_sensor_color(dRN), False))
+        lines.append((f"  ⬅  L-Mid(35°):   {dLM:.2f}m", get_sensor_color(dLM), False))
+        lines.append((f"  ➡  R-Mid(35°):   {dRM:.2f}m", get_sensor_color(dRM), False))
+        lines.append((f"  ↙  L-Far(60°):   {dLF:.2f}m", get_sensor_color(dLF), False))
+        lines.append((f"  ↘  R-Far(60°):   {dRF:.2f}m", get_sensor_color(dRF), False))
+        lines.append((f"  ⇐  L-Side(90°): {dLS:.2f}m", get_sensor_color(dLS), False))
+        lines.append((f"  ⇒  R-Side(90°): {dRS:.2f}m", get_sensor_color(dRS), False))
         
         # Add waypoint info if available
         if waypoints and len(waypoints) > 0:
-            lines.append("")
-            lines.append("═══ WAYPOINT NAVIGATION ═══")
-            lines.append(f"Điểm hiện tại: {current_waypoint_index + 1}/{len(waypoints)}")
+            lines.append(("", Colors.WHITE, False))
+            lines.append(("🎯 WAYPOINT NAV", Colors.GREEN, True))
+            lines.append((f"  Point: {current_waypoint_index + 1}/{len(waypoints)}", Colors.WHITE, False))
             
             if current_waypoint_index < len(waypoints):
                 wp = waypoints[current_waypoint_index]
-                lines.append(f"Đích: ({wp[0]:.1f}, {wp[1]:.1f})")
-                
-                # Tính khoảng cách đến đích
                 car_x = telemetry.get('x', 0)
                 car_y = telemetry.get('y', 0)
                 dist = math.sqrt((wp[0] - car_x)**2 + (wp[1] - car_y)**2)
-                lines.append(f"Khoảng cách: {dist:.2f}m")
+                lines.append((f"  Target: ({wp[0]:.1f}, {wp[1]:.1f})", Colors.YELLOW, False))
+                lines.append((f"  Dist: {dist:.2f}m", Colors.YELLOW, False))
 
-        lines.append("")
-        lines.append("Phím tắt: SPACE(start/pause), R(reset), M(set waypoint)")
+        lines.append(("", Colors.WHITE, False))
+        lines.append(("⌨️  CONTROLS", Colors.PURPLE, True))
+        lines.append(("  SPACE=Pause | R=Reset | M=Waypoint", Colors.LIGHT_GRAY, False))
+        lines.append(("  BKSP=Del | Ctrl+C=Clear | ESC=Exit", Colors.LIGHT_GRAY, False))
         
-        for i, line in enumerate(lines):
-            if i == 0:
-                text_surface = self.font_medium.render(line, True, Colors.YELLOW)
-            elif "═══" in line:
-                text_surface = self.font_small.render(line, True, Colors.GREEN)
+        # Render lines with proper formatting
+        y_offset = 10
+        for line_data in lines:
+            if isinstance(line_data, tuple):
+                text, color, is_header = line_data
+                if text == "":
+                    y_offset += line_height // 2
+                    continue
+                font = self.font_medium if is_header else self.font_small
+                text_surface = font.render(text, True, color)
             else:
-                text_surface = self.font_small.render(line, True, Colors.WHITE)
+                # Fallback for old format
+                text_surface = self.font_small.render(line_data, True, Colors.WHITE)
             
-            self.screen.blit(text_surface, (hud_x + 10, hud_y + 10 + i * line_height))
+            self.screen.blit(text_surface, (hud_x + 15, hud_y + y_offset))
+            y_offset += line_height
         
-        # Serial status indicator
+        # Serial status indicator with better styling
         serial_status = telemetry.get('serial_connected', False)
-        status_color = Colors.GREEN if serial_status else Colors.RED
-        status_text = "CONNECTED" if serial_status else "DISCONNECTED"
+        status_color = Colors.GREEN if serial_status else Colors.ORANGE
+        status_icon = "🔗" if serial_status else "🔌"
+        status_text = "ESP32 Connected" if serial_status else "No ESP32 (Autopilot)"
+        
+        # Background for status
+        status_bg = pygame.Surface((200, 24), pygame.SRCALPHA)
+        bg_color = (0, 100, 0, 180) if serial_status else (100, 50, 0, 180)
+        pygame.draw.rect(status_bg, bg_color, (0, 0, 200, 24), border_radius=5)
+        self.screen.blit(status_bg, (hud_x, self.window_height - 32))
         
         status_surface = self.font_small.render(
-            f"ESP32: {status_text}",
+            f"{status_icon} {status_text}",
             True,
             status_color
         )
-        self.screen.blit(status_surface, (hud_x + 10, self.window_height - 30))
+        self.screen.blit(status_surface, (hud_x + 8, self.window_height - 28))
 
     def _draw_control_panel(self, simulation_running: bool, waypoint_edit_mode: bool):
         """Draw bottom control buttons."""
@@ -515,26 +594,69 @@ class SimulationRenderer:
             elif action == 'reset':
                 label = 'Reset'
                 color = (180, 80, 80)
-            else:
+            elif action == 'toggle_waypoint_mode':
                 label = 'Set Waypoint'
                 color = (90, 120, 190) if not waypoint_edit_mode else (210, 170, 70)
+            elif action == 'delete_last_waypoint':
+                label = 'Delete Last'
+                color = (150, 70, 70)
+            elif action == 'clear_waypoints':
+                label = 'Clear All'
+                color = (120, 60, 60)
+            else:
+                continue
 
-            pygame.draw.rect(self.screen, color, rect, border_radius=6)
-            pygame.draw.rect(self.screen, Colors.WHITE, rect, 2, border_radius=6)
+            pygame.draw.rect(self.screen, color, rect, border_radius=5)
+            pygame.draw.rect(self.screen, Colors.WHITE, rect, 2, border_radius=5)
             text = self.font_small.render(label, True, Colors.WHITE)
             text_rect = text.get_rect(center=rect.center)
             self.screen.blit(text, text_rect)
 
+        # Hints
+        hint_y = self.window_height - 74
         if waypoint_edit_mode:
-            hint = self.font_small.render(
-                "Waypoint mode: click map to add point", True, Colors.YELLOW
-            )
-            self.screen.blit(hint, (10, self.window_height - 74))
+            if self.selected_waypoint_index is not None:
+                hint = self.font_small.render(
+                    f"Waypoint #{self.selected_waypoint_index + 1} selected - Click to move, ESC to cancel", 
+                    True, Colors.ORANGE
+                )
+            else:
+                hint = self.font_small.render(
+                    "Waypoint mode: Click map to add, Click waypoint to select/move", 
+                    True, Colors.YELLOW
+                )
+            self.screen.blit(hint, (10, hint_y))
 
     def _screen_to_world(self, x: int, y: int) -> Tuple[float, float]:
         world_x = x / self.scale_x
         world_y = (self.window_height - y) / self.scale_y
         return world_x, world_y
+    
+    def _is_click_in_hud(self, x: int, y: int) -> bool:
+        """Check if click is within HUD area"""
+        # HUD area at top-left
+        hud_area = pygame.Rect(10, 10, 320, 350)
+        return hud_area.collidepoint(x, y)
+    
+    def _find_waypoint_at_position(self, x: int, y: int, waypoints: Optional[List[Tuple[float, float]]] = None) -> Optional[int]:
+        """Find waypoint index at screen position (within click radius)"""
+        if waypoints is None:
+            waypoints = self.current_waypoints
+        
+        if not waypoints:
+            return None
+        
+        world_pos = self._screen_to_world(x, y)
+        click_radius = 20 / self.scale_x  # 20 pixels in world units
+        
+        for i, wp in enumerate(waypoints):
+            dx = wp[0] - world_pos[0]
+            dy = wp[1] - world_pos[1]
+            dist = math.sqrt(dx*dx + dy*dy)
+            if dist <= click_radius:
+                return i
+        
+        return None
 
     def consume_actions(self) -> dict:
         actions = self.button_actions.copy()
@@ -543,6 +665,10 @@ class SimulationRenderer:
             'reset': False,
             'toggle_waypoint_mode': False,
             'add_waypoint': None,
+            'delete_last_waypoint': False,
+            'clear_waypoints': False,
+            'move_waypoint': None,
+            'select_waypoint': None,
         }
         return actions
     
@@ -560,23 +686,64 @@ class SimulationRenderer:
             
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
-                    self.running = False
-                    return False
+                    # Cancel waypoint selection or exit
+                    if self.selected_waypoint_index is not None:
+                        self.selected_waypoint_index = None
+                        print("\n[Action] Hủy chọn waypoint")
+                    else:
+                        self.running = False
+                        return False
                 
                 elif event.key == pygame.K_r:
+                    # Reset simulation
                     self.button_actions['reset'] = True
+                    print("\n[Button] Reset được nhấn")
+                    
                 elif event.key == pygame.K_SPACE:
+                    # Toggle pause/start
                     self.button_actions['toggle_start'] = True
+                    print("\n[Button] Pause/Start được nhấn")
+                    
                 elif event.key == pygame.K_m:
+                    # Toggle waypoint edit mode
                     self.button_actions['toggle_waypoint_mode'] = True
+                    print("\n[Button] Toggle Waypoint Mode được nhấn")
+                
+                elif event.key == pygame.K_BACKSPACE or event.key == pygame.K_DELETE:
+                    # Delete last waypoint
+                    self.button_actions['delete_last_waypoint'] = True
+                    print("\n[Button] Delete Last Waypoint được nhấn")
+                
+                elif event.key == pygame.K_c and pygame.key.get_mods() & pygame.KMOD_CTRL:
+                    # Clear all waypoints (Ctrl+C)
+                    self.button_actions['clear_waypoints'] = True
+                    print("\n[Button] Clear All Waypoints được nhấn")
 
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 x, y = event.pos
+                
+                # Check if click is on a button
+                clicked_button = False
                 for action, rect in self.button_rects.items():
                     if rect.collidepoint(x, y):
                         self.button_actions[action] = True
+                        clicked_button = True
+                        
+                        # Print feedback
+                        button_names = {
+                            'toggle_start': 'Pause/Start',
+                            'reset': 'Reset',
+                            'toggle_waypoint_mode': 'Set Waypoint Mode',
+                            'delete_last_waypoint': 'Delete Last Waypoint',
+                            'clear_waypoints': 'Clear All Waypoints'
+                        }
+                        print(f"\n[Button] {button_names.get(action, action)} được nhấn")
                         break
-                else:
+                
+                # If not clicking on button and not in HUD area
+                if not clicked_button and not self._is_click_in_hud(x, y):
+                    # Store click position for waypoint operations
+                    self.button_actions['select_waypoint'] = (x, y)
                     self.button_actions['add_waypoint'] = self._screen_to_world(x, y)
 
         return True

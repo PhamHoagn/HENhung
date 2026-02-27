@@ -128,7 +128,7 @@ class HILRobocarWaypointSimulation:
         self.simulation_time = 0.0
         self.frame_count = 0
         self.start_pos = (car_x, car_y, car_heading)
-        self.autopilot = WaypointAutopilot(max_speed=0.8)
+        self.autopilot = WaypointAutopilot(max_speed=0.35)  # Reduced speed for safer navigation
         
         print("\n" + "═" * 60)
         print("  ✓ WAYPOINT NAVIGATION READY")
@@ -149,15 +149,80 @@ class HILRobocarWaypointSimulation:
                     self.running = False
                     break
 
+                # Process user actions
                 actions = self.renderer.consume_actions()
+                
+                # Toggle pause/start
                 if actions.get('toggle_start'):
                     self.simulation_running = not self.simulation_running
+                    status = "ĐANG CHẠY" if self.simulation_running else "TẠM DỪNG"
+                    print(f"✓ Simulation: {status}")
+                
+                # Reset simulation
                 if actions.get('reset'):
+                    print("\n⟲ Đang reset simulation...")
                     self._reset_simulation()
+                    print("✓ Đã reset về vị trí ban đầu\n")
+                
+                # Toggle waypoint edit mode
                 if actions.get('toggle_waypoint_mode'):
                     self.waypoint_edit_mode = not self.waypoint_edit_mode
-                if self.waypoint_edit_mode and actions.get('add_waypoint'):
-                    self._add_waypoint(actions['add_waypoint'])
+                    mode_status = "BẬT" if self.waypoint_edit_mode else "TẮT"
+                    print(f"✓ Chế độ Set Waypoint: {mode_status}")
+                    if self.waypoint_edit_mode:
+                        print("  → Click vào map để thêm waypoint")
+                        print("  → Click vào waypoint để chọn/di chuyển")
+                    # Reset selection when exiting edit mode
+                    if not self.waypoint_edit_mode:
+                        self.renderer.selected_waypoint_index = None
+                
+                # Delete last waypoint
+                if actions.get('delete_last_waypoint'):
+                    self._delete_last_waypoint()
+                
+                # Clear all waypoints
+                if actions.get('clear_waypoints'):
+                    self._clear_all_waypoints()
+                
+                # Handle waypoint click operations (only in edit mode)
+                if self.waypoint_edit_mode and actions.get('select_waypoint'):
+                    screen_x, screen_y = actions['select_waypoint']
+                    
+                    # Check if clicking on existing waypoint (using cached waypoints in renderer)
+                    clicked_wp_idx = self.renderer._find_waypoint_at_position(screen_x, screen_y)
+                    
+                    if clicked_wp_idx is not None:
+                        # Clicking on waypoint
+                        if self.renderer.selected_waypoint_index == clicked_wp_idx:
+                            # Clicking same waypoint - deselect
+                            self.renderer.selected_waypoint_index = None
+                            print(f"✓ Đã bỏ chọn waypoint #{clicked_wp_idx + 1}")
+                        elif self.renderer.selected_waypoint_index is not None:
+                            # Different waypoint selected - move it to clicked position
+                            old_idx = self.renderer.selected_waypoint_index
+                            self._move_waypoint(old_idx, clicked_wp_idx)
+                            self.renderer.selected_waypoint_index = None
+                        else:
+                            # Select waypoint
+                            self.renderer.selected_waypoint_index = clicked_wp_idx
+                            print(f"✓ Đã chọn waypoint #{clicked_wp_idx + 1}")
+                            print("  → Click vị trí mới để di chuyển, hoặc click lại để bỏ chọn")
+                    else:
+                        # Not clicking on waypoint - add or move
+                        if self.renderer.selected_waypoint_index is not None:
+                            # Move selected waypoint to new position
+                            wp_pos = actions['add_waypoint']
+                            self._move_waypoint_to_position(
+                                self.renderer.selected_waypoint_index, 
+                                wp_pos
+                            )
+                            self.renderer.selected_waypoint_index = None
+                        else:
+                            # Add new waypoint
+                            wp_pos = actions['add_waypoint']
+                            self._add_waypoint(wp_pos)
+                            wp_count = len(self.waypoint_navigator.waypoints) if self.waypoint_navigator else 1
+                            print(f"✓ Đã thêm waypoint #{wp_count} tại ({wp_pos[0]:.2f}, {wp_pos[1]:.2f})")
                 
                 # Time step
                 current_time = time.time()
@@ -165,9 +230,9 @@ class HILRobocarWaypointSimulation:
                 last_sim_time = current_time
                 dt = self.sim_dt
                 
-                # Get sensor data
+                # Get sensor data (9 sensors: 7 forward cone + 2 side)
                 sensor_data = self.world.get_sensor_data()
-                dF, dL, dR = sensor_data
+                dC, dLN, dRN, dLM, dRM, dLF, dRF, dLS, dRS = sensor_data
                 
                 # Get car state
                 car_state = self.world.get_car_state()
@@ -185,17 +250,20 @@ class HILRobocarWaypointSimulation:
                 # Send data to ESP32 (với thông tin waypoint)
                 serial_connected = False
                 if self.serial and self.serial.is_connected:
-                    # Gửi sensor + waypoint info
+                    # Gửi sensor + waypoint info + car position
                     if self.waypoint_navigator:
                         current_wp = self.waypoint_navigator.get_current_waypoint()
                         if current_wp:
                             wx, wy = current_wp
-                            # Send enhanced data
-                            self.serial.send_sensor_data(dF, dL, dR, wx, wy, car_heading)
+                            # Send enhanced data with position (9 sensors)
+                            self.serial.send_sensor_data(
+                                dC, dLN, dRN, dLM, dRM, dLF, dRF, dLS, dRS,
+                                wx, wy, car_heading, car_x, car_y
+                            )
                         else:
-                            self.serial.send_sensor_data(dF, dL, dR)
+                            self.serial.send_sensor_data(dC, dLN, dRN, dLM, dRM, dLF, dRF, dLS, dRS)
                     else:
-                        self.serial.send_sensor_data(dF, dL, dR)
+                        self.serial.send_sensor_data(dC, dLN, dRN, dLM, dRM, dLF, dRF, dLS, dRS)
                     
                     serial_connected = True
                 
@@ -239,9 +307,15 @@ class HILRobocarWaypointSimulation:
                     'x': car_x,
                     'y': car_y,
                     'heading': car_heading,
-                    'dF': dF,
-                    'dL': dL,
-                    'dR': dR,
+                    'dC': dC,        # Center sensor
+                    'dLN': dLN,      # Left near (15°)
+                    'dRN': dRN,      # Right near (15°)
+                    'dLM': dLM,      # Left mid (35°)
+                    'dRM': dRM,      # Right mid (35°)
+                    'dLF': dLF,      # Left far (60°)
+                    'dRF': dRF,      # Right far (60°)
+                    'dLS': dLS,      # Left side (90°)
+                    'dRS': dRS,      # Right side (90°)
                     'serial_connected': serial_connected
                 }
                 
@@ -314,17 +388,75 @@ class HILRobocarWaypointSimulation:
 
     def _add_waypoint(self, waypoint: Tuple[float, float]):
         """Append waypoint from UI click and keep within world bounds."""
+        # Clamp waypoint to world bounds with margin
         wx = min(max(0.2, waypoint[0]), self.world.width - 0.2)
         wy = min(max(0.2, waypoint[1]), self.world.height - 0.2)
 
         if self.waypoint_navigator is None:
+            # Create new navigator with first waypoint
             self.waypoint_navigator = WaypointNavigator(
                 waypoints=[(wx, wy)],
                 reach_radius=0.3,
                 loop=True,
             )
+            print(f"  → Khởi tạo WaypointNavigator với waypoint đầu tiên")
         else:
+            # Add to existing waypoints
             self.waypoint_navigator.waypoints.append((wx, wy))
+    
+    def _delete_last_waypoint(self):
+        """Delete the last waypoint from the list."""
+        if self.waypoint_navigator and len(self.waypoint_navigator.waypoints) > 0:
+            deleted_wp = self.waypoint_navigator.waypoints.pop()
+            print(f"✓ Đã xóa waypoint cuối cùng: ({deleted_wp[0]:.2f}, {deleted_wp[1]:.2f})")
+            print(f"  → Còn lại {len(self.waypoint_navigator.waypoints)} waypoint(s)")
+            
+            # Clear navigator if no waypoints left
+            if len(self.waypoint_navigator.waypoints) == 0:
+                self.waypoint_navigator = None
+                print("  → Không còn waypoint nào")
+            
+            # Reset selection
+            self.renderer.selected_waypoint_index = None
+        else:
+            print("⚠ Không có waypoint nào để xóa")
+    
+    def _clear_all_waypoints(self):
+        """Clear all waypoints."""
+        if self.waypoint_navigator and len(self.waypoint_navigator.waypoints) > 0:
+            count = len(self.waypoint_navigator.waypoints)
+            self.waypoint_navigator = None
+            self.renderer.selected_waypoint_index = None
+            print(f"✓ Đã xóa tất cả {count} waypoint(s)")
+        else:
+            print("⚠ Không có waypoint nào để xóa")
+    
+    def _move_waypoint(self, from_index: int, to_index: int):
+        """Swap two waypoints in the list."""
+        if not self.waypoint_navigator or len(self.waypoint_navigator.waypoints) <= max(from_index, to_index):
+            return
+        
+        # Swap waypoints
+        waypoints = self.waypoint_navigator.waypoints
+        waypoints[from_index], waypoints[to_index] = waypoints[to_index], waypoints[from_index]
+        
+        print(f"✓ Đã hoán đổi waypoint #{from_index + 1} và #{to_index + 1}")
+    
+    def _move_waypoint_to_position(self, index: int, new_position: Tuple[float, float]):
+        """Move a waypoint to a new position."""
+        if not self.waypoint_navigator or index >= len(self.waypoint_navigator.waypoints):
+            return
+        
+        # Clamp to world bounds
+        wx = min(max(0.2, new_position[0]), self.world.width - 0.2)
+        wy = min(max(0.2, new_position[1]), self.world.height - 0.2)
+        
+        old_pos = self.waypoint_navigator.waypoints[index]
+        self.waypoint_navigator.waypoints[index] = (wx, wy)
+        
+        print(f"✓ Đã di chuyển waypoint #{index + 1}")
+        print(f"  Từ: ({old_pos[0]:.2f}, {old_pos[1]:.2f})")
+        print(f"  Đến: ({wx:.2f}, {wy:.2f})")
 
 
 def main_waypoint():

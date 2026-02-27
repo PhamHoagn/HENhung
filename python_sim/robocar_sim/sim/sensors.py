@@ -226,23 +226,62 @@ class UltrasonicSensor:
 
 
 class SensorArray:
-    """Array of ultrasonic sensors (Front, Left, Right)"""
+    """Array of ultrasonic sensors in forward-facing wide cone pattern + side sensors"""
     
     def __init__(self):
-        """Initialize three ultrasonic sensors"""
-        self.sensor_front = UltrasonicSensor(
-            max_range=3.0,
-            angle_offset=0.0  # 0° (forward)
+        """Initialize nine ultrasonic sensors: 7 forward cone (120° FOV) + 2 side (±90°)"""
+        # Center sensor - straight ahead
+        self.sensor_center = UltrasonicSensor(
+            max_range=5.5,  # Longest range
+            angle_offset=0.0  # 0° (center)
         )
         
-        self.sensor_left = UltrasonicSensor(
-            max_range=2.0,
-            angle_offset=math.pi / 2  # 90° (left)
+        # Near-left sensor - 15° left
+        self.sensor_left_near = UltrasonicSensor(
+            max_range=5.0,
+            angle_offset=math.pi / 12  # 15° (left near)
         )
         
-        self.sensor_right = UltrasonicSensor(
-            max_range=2.0,
-            angle_offset=-math.pi / 2  # -90° (right)
+        # Near-right sensor - 15° right
+        self.sensor_right_near = UltrasonicSensor(
+            max_range=5.0,
+            angle_offset=-math.pi / 12  # -15° (right near)
+        )
+        
+        # Mid-left sensor - 35° left
+        self.sensor_left_mid = UltrasonicSensor(
+            max_range=4.5,
+            angle_offset=math.pi * 7 / 36  # 35° (left mid)
+        )
+        
+        # Mid-right sensor - 35° right
+        self.sensor_right_mid = UltrasonicSensor(
+            max_range=4.5,
+            angle_offset=-math.pi * 7 / 36  # -35° (right mid)
+        )
+        
+        # Far-left sensor - 60° left
+        self.sensor_left_far = UltrasonicSensor(
+            max_range=4.0,
+            angle_offset=math.pi / 3  # 60° (left far)
+        )
+        
+        # Far-right sensor - 60° right
+        self.sensor_right_far = UltrasonicSensor(
+            max_range=4.0,
+            angle_offset=-math.pi / 3  # -60° (right far)
+        )
+        
+        # Side-left sensor - 90° left (perpendicular)
+        self.sensor_left_side = UltrasonicSensor(
+            max_range=2.5,  # Shorter range for side detection
+            angle_offset=math.pi / 2  # 90° (left side)
+        )
+        
+        # Side-right sensor - 90° right (perpendicular)
+        self.sensor_right_side = UltrasonicSensor(
+            max_range=2.5,  # Shorter range for side detection
+            angle_offset=-math.pi / 2  # -90° (right side)
         )
     
     def measure_all(
@@ -252,26 +291,52 @@ class SensorArray:
         obstacles: List,
         world_width: float,
         world_height: float
-    ) -> Tuple[Ray, Ray, Ray]:
+    ) -> Tuple[Ray, Ray, Ray, Ray, Ray, Ray, Ray, Ray, Ray]:
         """
-        Measure all three sensors
+        Measure all nine sensors: 7 forward cone + 2 side
         
         Returns:
-            (front_ray, left_ray, right_ray)
+            (center, left_near, right_near, left_mid, right_mid, left_far, right_far,
+             left_side, right_side)
         """
-        ray_front = self.sensor_front.measure(
+        ray_center = self.sensor_center.measure(
             robot_pos, robot_heading, obstacles, world_width, world_height
         )
         
-        ray_left = self.sensor_left.measure(
+        ray_left_near = self.sensor_left_near.measure(
             robot_pos, robot_heading, obstacles, world_width, world_height
         )
         
-        ray_right = self.sensor_right.measure(
+        ray_right_near = self.sensor_right_near.measure(
             robot_pos, robot_heading, obstacles, world_width, world_height
         )
         
-        return (ray_front, ray_left, ray_right)
+        ray_left_mid = self.sensor_left_mid.measure(
+            robot_pos, robot_heading, obstacles, world_width, world_height
+        )
+        
+        ray_right_mid = self.sensor_right_mid.measure(
+            robot_pos, robot_heading, obstacles, world_width, world_height
+        )
+        
+        ray_left_far = self.sensor_left_far.measure(
+            robot_pos, robot_heading, obstacles, world_width, world_height
+        )
+        
+        ray_right_far = self.sensor_right_far.measure(
+            robot_pos, robot_heading, obstacles, world_width, world_height
+        )
+        
+        ray_left_side = self.sensor_left_side.measure(
+            robot_pos, robot_heading, obstacles, world_width, world_height
+        )
+        
+        ray_right_side = self.sensor_right_side.measure(
+            robot_pos, robot_heading, obstacles, world_width, world_height
+        )
+        
+        return (ray_center, ray_left_near, ray_right_near, ray_left_mid, 
+                ray_right_mid, ray_left_far, ray_right_far, ray_left_side, ray_right_side)
     
     def get_distances(
         self,
@@ -280,19 +345,26 @@ class SensorArray:
         obstacles: List,
         world_width: float,
         world_height: float
-    ) -> Tuple[float, float, float]:
+    ) -> Tuple[float, float, float, float, float, float, float, float, float]:
         """
-        Get distance measurements from all sensors
+        Get distance measurements from all 9 sensors: 7 forward cone + 2 side
         
         Returns:
-            (distance_front, distance_left, distance_right) in meters
+            (d_center, d_left_near, d_right_near, d_left_mid, d_right_mid, 
+             d_left_far, d_right_far, d_left_side, d_right_side) in meters
         """
         rays = self.measure_all(
             robot_pos, robot_heading, obstacles, world_width, world_height
         )
         
         return (
-            rays[0].hit_distance,
-            rays[1].hit_distance,
-            rays[2].hit_distance
+            rays[0].hit_distance,  # center
+            rays[1].hit_distance,  # left near
+            rays[2].hit_distance,  # right near
+            rays[3].hit_distance,  # left mid
+            rays[4].hit_distance,  # right mid
+            rays[5].hit_distance,  # left far
+            rays[6].hit_distance,  # right far
+            rays[7].hit_distance,  # left side (90°)
+            rays[8].hit_distance   # right side (90°)
         )

@@ -6,20 +6,20 @@ description: "Robot follows square path waypoints while avoiding obstacles"
 
 # Waypoints (x, y) in meters
 waypoints:
-  - [2.0, 2.0]   # Point 1 - Bottom left
-  - [6.0, 2.0]   # Point 2 - Bottom right  
-  - [6.0, 6.0]   # Point 3 - Top right
-  - [2.0, 6.0]   # Point 4 - Top left
-  - [2.0, 2.0]   # Point 5 - Back to start
+  - [1.5, 1.5]   # Point 1 - Start
+  - [6.5, 1.5]   # Point 2 - Bottom right  
+  - [6.5, 6.5]   # Point 3 - Top right
+  - [1.5, 6.5]   # Point 4 - Top left
+  - [1.5, 1.5]   # Point 5 - Back to start
 
 # Waypoint settings
-waypoint_radius: 0.3  # meters - radius to consider waypoint reached
+waypoint_radius: 0.35  # meters - radius to consider waypoint reached
 loop_waypoints: true   # Loop back to first waypoint when done
 
-# Car starting position
-car_start_x: 2.0
-car_start_y: 2.0
-car_start_heading: 0.0  # degrees (0 = right, 90 = up)
+# Car starting position (xa vật cản)
+car_start_x: 1.0
+car_start_y: 1.0
+car_start_heading: 0.0  # degrees (0 = right, 90 = up) - point toward first leg
 
 # Obstacles
 obstacles:

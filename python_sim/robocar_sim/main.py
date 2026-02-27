@@ -117,6 +117,22 @@ class HILRobocarSimulation:
                     self.running = False
                     break
                 
+                # Process user actions
+                actions = self.renderer.consume_actions()
+                
+                # Toggle pause/start
+                if actions.get('toggle_start'):
+                    self.paused = not self.paused
+                    status = "TẠM DỪNG" if self.paused else "ĐANG CHẠY"
+                    print(f"✓ Simulation: {status}")
+                
+                # Reset simulation
+                if actions.get('reset'):
+                    print("\n⟲ Đang reset simulation...")
+                    self.world.reset(0.5, 0.5, 0.0)
+                    self.simulation_time = 0.0
+                    print("✓ Đã reset về vị trí ban đầu\n")
+                
                 # Calculate elapsed time for physics
                 current_time = time.time()
                 real_dt = current_time - last_sim_time
@@ -174,7 +190,8 @@ class HILRobocarSimulation:
                     obstacles=self.world.obstacles.get_obstacles(),
                     sensor_rays=sensor_rays,
                     is_collision=self.world.is_crashed(),
-                    telemetry=telemetry
+                    telemetry=telemetry,
+                    simulation_running=not self.paused
                 )
                 
                 # Check for collision
