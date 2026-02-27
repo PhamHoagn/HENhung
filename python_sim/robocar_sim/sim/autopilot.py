@@ -42,11 +42,6 @@ class WaypointAutopilot:
         d_left = min(dLN, dLM, dLF)  # Closest on left side (forward arc)
         d_right = min(dRN, dRM, dRF)  # Closest on right side (forward arc)
         min_all = min(dC, dLN, dRN, dLM, dRM, dLF, dRF)  # Minimum of FORWARD sensors only
-        
-        # Check if obstacle has been cleared using side sensors
-        # When both side sensors show clear (> 1.8m) AND forward is reasonably clear (> 1.2m),
-        # car has likely passed the obstacle and can reduce avoidance
-        obstacle_cleared = (dLS > 1.8 and dRS > 1.8 and min_all > 1.2)
 
         if waypoint is None:
             target_speed = 0.0

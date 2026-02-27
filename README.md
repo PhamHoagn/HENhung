@@ -1,27 +1,28 @@
-<<<<<<< HEAD
-# HIL Robocar Simulation
+# Robocar 4 Bánh Tự Hành - HIL Simulation
 
-**Hardware-in-the-Loop (HIL) Robot Car Simulation for Academic Demonstrations**
+**Thiết kế và mô phỏng Robocar 4 bánh tự hành theo lộ trình định trước, tránh vật cản thông minh sử dụng AI nhúng**
 
-A complete HIL system where ESP32 firmware (running on Wokwi) controls a virtual robot car in a Python-based 2D physics simulation.
+Hệ thống Hardware-in-the-Loop (HIL) hoàn chỉnh: ESP32 firmware (chạy trên Wokwi) điều khiển xe robot ảo trong môi trường mô phỏng vật lý Python 2D.
 
 ---
 
-## 🎯 Project Overview
+## 🎯 Tổng Quan Dự Án
 
-This is a **true Hardware-in-the-Loop (HIL)** system:
-- ✅ **ESP32 firmware** acts as the controller (obstacle avoidance logic)
-- ✅ **Python simulation** acts as the "real world" (physics, sensors, rendering)
-- ✅ **Serial communication** connects them (JSON protocol)
-- ✅ **Real-time operation** at 50-60 Hz
+Dự án **HIL (Hardware-in-the-Loop)** thực sự:
+- ✅ **ESP32 firmware** - Bộ điều khiển nhúng AI (logic tránh vật cản thông minh)
+- ✅ **Python simulation** - Môi trường vật lý thực tế ảo (physics, sensors, rendering)
+- ✅ **Serial JSON** - Giao thức truyền thông real-time
+- ✅ **Waypoint Navigation** - Điều hướng tự động theo lộ trình định trước
+- ✅ **9-Sensor Array** - Mảng 9 cảm biến siêu âm (7 trước 120° + 2 bên 90°)
+- ✅ **Real-time** - Vận hành 50-60 Hz
 
-### What This Demonstrates
-- Embedded systems development workflows
-- HIL testing methodology
-- Real-time communication protocols
-- Differential drive robotics
-- Sensor fusion (ultrasonic sensors)
-- Control algorithms (obstacle avoidance)
+### Tính Năng Minh Họa
+- Quy trình phát triển hệ thống nhúng
+- Phương pháp kiểm thử HIL
+- Giao thức truyền thông real-time
+- Động học robot differential drive
+- Sensor fusion (9 cảm biến siêu âm)
+- Thuật toán điều khiển tránh vật cản thông minh
 
 ---
 
@@ -348,14 +349,11 @@ For questions or support:
 
 ---
 
-## ⭐ Star this repo if it helped you!
+## ⭐ Sử dụng cho học tập!
 
-If you use this project for your course or research, please give it a star ⭐ and cite it in your work!
+Dự án này được thiết kế cho môn Hệ Nhúng - đề tài **Robocar 4 bánh tự hành** với waypoint navigation và obstacle avoidance thông minh.
 
 ---
 
-**Made with ❤️ for embedded systems education**
-=======
-# Group10_Hệ Nhúng-1-2-25-N02-_2025
-Thiết kế và mô phỏng Robocar 4 bánh tự hành theo lộ trình định trước, tránh vật cản thông minh sử dụng AI nhúng
->>>>>>> abe4479d0f157db015daf3632ce68e56941ee3b7
+**Group 10 - Hệ Nhúng 1-2-25-N02 - 2025**
+
