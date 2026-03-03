@@ -44,18 +44,17 @@ class ObstacleManager:
         """
         self.clear_obstacles()
         
-        # Create a simple obstacle course
-        # Center obstacles
-        self.add_obstacle(world_width * 0.5, world_height * 0.5, 0.3)
+        # Center obstacle (large)
+        self.add_obstacle(world_width * 0.5, world_height * 0.5, 0.40)
         
-        # Left side obstacles
-        self.add_obstacle(world_width * 0.3, world_height * 0.3, 0.2)
-        self.add_obstacle(world_width * 0.3, world_height * 0.7, 0.2)
+        # Quadrant obstacles
+        self.add_obstacle(world_width * 0.25, world_height * 0.30, 0.25)
+        self.add_obstacle(world_width * 0.25, world_height * 0.70, 0.25)
+        self.add_obstacle(world_width * 0.75, world_height * 0.30, 0.25)
+        self.add_obstacle(world_width * 0.75, world_height * 0.70, 0.25)
         
-        # Right side obstacles
-        self.add_obstacle(world_width * 0.7, world_height * 0.3, 0.2)
-        self.add_obstacle(world_width * 0.7, world_height * 0.7, 0.2)
-        
-        # Top and bottom
-        self.add_obstacle(world_width * 0.5, world_height * 0.2, 0.15)
-        self.add_obstacle(world_width * 0.5, world_height * 0.8, 0.15)
+        # Edge obstacles
+        self.add_obstacle(world_width * 0.50, world_height * 0.20, 0.20)
+        self.add_obstacle(world_width * 0.50, world_height * 0.80, 0.20)
+        self.add_obstacle(world_width * 0.35, world_height * 0.50, 0.20)
+        self.add_obstacle(world_width * 0.65, world_height * 0.50, 0.20)

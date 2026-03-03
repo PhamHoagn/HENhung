@@ -37,10 +37,10 @@ class SimulationRenderer:
     
     def __init__(
         self,
-        window_width: int = 800,
-        window_height: int = 800,
-        world_width: float = 5.0,
-        world_height: float = 5.0,
+        window_width: int = 1000,
+        window_height: int = 1000,
+        world_width: float = 12.0,
+        world_height: float = 12.0,
         target_fps: int = 60
     ):
         """
@@ -64,9 +64,18 @@ class SimulationRenderer:
         self.world_width = world_width
         self.world_height = world_height
         
-        # Calculate scale (pixels per meter)
-        self.scale_x = window_width / world_width
-        self.scale_y = window_height / world_height
+        # Zoom & pan settings
+        self.zoom = 1.0
+        self.zoom_min = 0.4
+        self.zoom_max = 3.0
+        self.camera_x = 0.0   # world-space camera offset
+        self.camera_y = 0.0
+        
+        # Calculate base scale (pixels per meter)
+        self.base_scale_x = window_width / world_width
+        self.base_scale_y = window_height / world_height
+        self.scale_x = self.base_scale_x * self.zoom
+        self.scale_y = self.base_scale_y * self.zoom
         
         # FPS control
         self.clock = pygame.time.Clock()
@@ -110,18 +119,18 @@ class SimulationRenderer:
             'clear_waypoints': pygame.Rect(140, button_y_bottom, 110, 30),
         }
     
+    def _update_scale(self):
+        """Recalculate scale after zoom change."""
+        self.scale_x = self.base_scale_x * self.zoom
+        self.scale_y = self.base_scale_y * self.zoom
+
     def world_to_screen(self, x: float, y: float) -> Tuple[int, int]:
         """
         Convert world coordinates (meters) to screen coordinates (pixels)
-        
-        Args:
-            x, y: Position in meters
-        
-        Returns:
-            (screen_x, screen_y) in pixels
+        Applies zoom and camera offset.
         """
-        screen_x = int(x * self.scale_x)
-        screen_y = int(self.window_height - y * self.scale_y)  # Flip Y axis
+        screen_x = int((x - self.camera_x) * self.scale_x)
+        screen_y = int(self.window_height - (y - self.camera_y) * self.scale_y)
         return (screen_x, screen_y)
     
     def render_frame(
@@ -560,6 +569,7 @@ class SimulationRenderer:
         lines.append(("⌨️  CONTROLS", Colors.PURPLE, True))
         lines.append(("  SPACE=Pause | R=Reset | M=Waypoint", Colors.LIGHT_GRAY, False))
         lines.append(("  BKSP=Del | Ctrl+C=Clear | ESC=Exit", Colors.LIGHT_GRAY, False))
+        lines.append((f"  Scroll/+−=Zoom({self.zoom:.1f}x) | 0=Reset view", Colors.LIGHT_GRAY, False))
         
         # Render lines with proper formatting
         y_offset = 10
@@ -640,8 +650,8 @@ class SimulationRenderer:
             self.screen.blit(hint, (10, hint_y))
 
     def _screen_to_world(self, x: int, y: int) -> Tuple[float, float]:
-        world_x = x / self.scale_x
-        world_y = (self.window_height - y) / self.scale_y
+        world_x = x / self.scale_x + self.camera_x
+        world_y = (self.window_height - y) / self.scale_y + self.camera_y
         return world_x, world_y
     
     def _is_click_in_hud(self, x: int, y: int) -> bool:
@@ -730,6 +740,39 @@ class SimulationRenderer:
                     # Clear all waypoints (Ctrl+C)
                     self.button_actions['clear_waypoints'] = True
                     print("\n[Button] Clear All Waypoints được nhấn")
+
+                elif event.key == pygame.K_PLUS or event.key == pygame.K_EQUALS or event.key == pygame.K_KP_PLUS:
+                    # Zoom in
+                    self.zoom = min(self.zoom * 1.2, self.zoom_max)
+                    self._update_scale()
+                
+                elif event.key == pygame.K_MINUS or event.key == pygame.K_KP_MINUS:
+                    # Zoom out
+                    self.zoom = max(self.zoom / 1.2, self.zoom_min)
+                    self._update_scale()
+                
+                elif event.key == pygame.K_0:
+                    # Reset zoom & camera
+                    self.zoom = 1.0
+                    self.camera_x = 0.0
+                    self.camera_y = 0.0
+                    self._update_scale()
+
+            elif event.type == pygame.MOUSEWHEEL:
+                # Mouse wheel zoom (centered on cursor)
+                mx, my = pygame.mouse.get_pos()
+                world_before = self._screen_to_world(mx, my)
+                
+                if event.y > 0:
+                    self.zoom = min(self.zoom * 1.15, self.zoom_max)
+                elif event.y < 0:
+                    self.zoom = max(self.zoom / 1.15, self.zoom_min)
+                self._update_scale()
+                
+                # Adjust camera so the point under cursor stays fixed
+                world_after = self._screen_to_world(mx, my)
+                self.camera_x += world_before[0] - world_after[0]
+                self.camera_y += world_before[1] - world_after[1]
 
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 x, y = event.pos

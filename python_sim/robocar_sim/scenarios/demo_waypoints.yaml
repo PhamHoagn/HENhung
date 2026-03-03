@@ -4,38 +4,58 @@
 name: "Square Waypoint Navigation"
 description: "Robot follows square path waypoints while avoiding obstacles"
 
-# Waypoints (x, y) in meters
+# Waypoints (x, y) in meters — map 12×12
 waypoints:
-  - [1.5, 1.5]   # Point 1 - Start
-  - [6.5, 1.5]   # Point 2 - Bottom right  
-  - [6.5, 6.5]   # Point 3 - Top right
-  - [1.5, 6.5]   # Point 4 - Top left
-  - [1.5, 1.5]   # Point 5 - Back to start
+  - [2.0, 2.0]     # Point 1 - Start
+  - [10.0, 2.0]    # Point 2 - Bottom right  
+  - [10.0, 10.0]   # Point 3 - Top right
+  - [2.0, 10.0]    # Point 4 - Top left
+  - [2.0, 2.0]     # Point 5 - Back to start
 
 # Waypoint settings
-waypoint_radius: 0.35  # meters - radius to consider waypoint reached
+waypoint_radius: 0.40  # meters - radius to consider waypoint reached
 loop_waypoints: true   # Loop back to first waypoint when done
 
-# Car starting position (xa vật cản)
-car_start_x: 1.0
-car_start_y: 1.0
-car_start_heading: 0.0  # degrees (0 = right, 90 = up) - point toward first leg
+# Car starting position
+car_start_x: 1.5
+car_start_y: 1.5
+car_start_heading: 0.0  # degrees (0 = right, 90 = up)
 
-# Obstacles
+# Obstacles — spread across 12×12 map
 obstacles:
   - type: "box"
-    x: 4.0
-    y: 4.0
-    width: 1.0
-    height: 1.0
+    x: 6.0
+    y: 6.0
+    width: 1.2
+    height: 1.2
     
   - type: "circle"
-    x: 3.5
-    y: 5.5
-    radius: 0.4
+    x: 4.0
+    y: 8.5
+    radius: 0.45
     
   - type: "box"
-    x: 5.5
-    y: 3.0
-    width: 0.8
-    height: 0.8
+    x: 8.5
+    y: 4.0
+    width: 0.9
+    height: 0.9
+
+  - type: "circle"
+    x: 3.5
+    y: 4.0
+    radius: 0.35
+
+  - type: "circle"
+    x: 8.0
+    y: 8.0
+    radius: 0.40
+
+  - type: "circle"
+    x: 6.0
+    y: 2.5
+    radius: 0.30
+
+  - type: "circle"
+    x: 6.0
+    y: 9.5
+    radius: 0.35

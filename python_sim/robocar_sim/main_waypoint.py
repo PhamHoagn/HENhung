@@ -31,10 +31,10 @@ class HILRobocarWaypointSimulation:
         self,
         serial_port: Optional[str] = None,
         scenario_file: Optional[str] = None,
-        world_width: float = 8.0,
-        world_height: float = 8.0,
-        window_width: int = 800,
-        window_height: int = 800,
+        world_width: float = 12.0,
+        world_height: float = 12.0,
+        window_width: int = 1000,
+        window_height: int = 1000,
         target_fps: int = 60,
         sim_dt: float = 0.02
     ):
@@ -87,7 +87,7 @@ class HILRobocarWaypointSimulation:
         obstacles = scenario.get('obstacles', [])
         if obstacles:
             # Clear default obstacles and load scenario obstacles
-            self.world.obstacles._obstacles = []  # Clear internal list
+            self.world.obstacles.clear_obstacles()
             for obs in obstacles:
                 if obs.get('type') == 'circle':
                     self.world.obstacles.add_obstacle(
@@ -221,9 +221,9 @@ class HILRobocarWaypointSimulation:
                         else:
                             # Add new waypoint
                             wp_pos = actions['add_waypoint']
-                            self._add_waypoint(wp_pos)
-                            wp_count = len(self.waypoint_navigator.waypoints) if self.waypoint_navigator else 1
-                            print(f"✓ Đã thêm waypoint #{wp_count} tại ({wp_pos[0]:.2f}, {wp_pos[1]:.2f})")
+                            if self._add_waypoint(wp_pos):
+                                wp_count = len(self.waypoint_navigator.waypoints) if self.waypoint_navigator else 1
+                                print(f"✓ Đã thêm waypoint #{wp_count} tại ({wp_pos[0]:.2f}, {wp_pos[1]:.2f})")
                 
                 # Time step
                 current_time = time.time()
@@ -413,14 +413,43 @@ class HILRobocarWaypointSimulation:
         self.autopilot.reset()
         self.simulation_time = 0.0
 
-    def _add_waypoint(self, waypoint: Tuple[float, float]):
-        """Append waypoint from UI click and keep within world bounds."""
-        # Clamp waypoint to world bounds with margin
-        wx = min(max(0.2, waypoint[0]), self.world.width - 0.2)
-        wy = min(max(0.2, waypoint[1]), self.world.height - 0.2)
+    # Minimum safe distance from walls and obstacles for waypoint placement
+    WAYPOINT_WALL_MARGIN = 0.80   # metres from map edge
+    WAYPOINT_OBS_MARGIN  = 0.50   # metres clearance from obstacle surface
+
+    def _is_waypoint_safe(self, wx: float, wy: float) -> Tuple[bool, str]:
+        """Check if a waypoint position is safe (not too close to walls/obstacles)."""
+        # Hard bounds: must be inside the map
+        if wx < 0 or wx > self.world.width or wy < 0 or wy > self.world.height:
+            return False, "Ngoài giới hạn map"
+        
+        margin = self.WAYPOINT_WALL_MARGIN
+        if wx < margin or wx > self.world.width - margin:
+            return False, f"Quá gần giới hạn map ngang (cần ≥{margin}m)"
+        if wy < margin or wy > self.world.height - margin:
+            return False, f"Quá gần giới hạn map dọc (cần ≥{margin}m)"
+        
+        for obs in self.world.obstacles.get_obstacles():
+            ox, oy = obs.position
+            dist = math.sqrt((wx - ox)**2 + (wy - oy)**2)
+            min_dist = obs.radius + self.WAYPOINT_OBS_MARGIN
+            if dist < min_dist:
+                return False, f"Quá gần vật cản tại ({ox:.1f},{oy:.1f}), cần ≥{min_dist:.2f}m (hiện {dist:.2f}m)"
+        
+        return True, ""
+
+    def _add_waypoint(self, waypoint: Tuple[float, float]) -> bool:
+        """Append waypoint from UI click — validate distance from walls & obstacles.
+        Returns True if waypoint was added successfully."""
+        wx, wy = waypoint[0], waypoint[1]
+        
+        # Validate placement
+        safe, reason = self._is_waypoint_safe(wx, wy)
+        if not safe:
+            print(f"⚠ Không thể đặt waypoint: {reason}")
+            return False
 
         if self.waypoint_navigator is None:
-            # Create new navigator with first waypoint
             self.waypoint_navigator = WaypointNavigator(
                 waypoints=[(wx, wy)],
                 reach_radius=0.3,
@@ -428,8 +457,8 @@ class HILRobocarWaypointSimulation:
             )
             print(f"  → Khởi tạo WaypointNavigator với waypoint đầu tiên")
         else:
-            # Add to existing waypoints
             self.waypoint_navigator.waypoints.append((wx, wy))
+        return True
     
     def _delete_last_waypoint(self):
         """Delete the last waypoint from the list."""
@@ -470,13 +499,16 @@ class HILRobocarWaypointSimulation:
         print(f"✓ Đã hoán đổi waypoint #{from_index + 1} và #{to_index + 1}")
     
     def _move_waypoint_to_position(self, index: int, new_position: Tuple[float, float]):
-        """Move a waypoint to a new position."""
+        """Move a waypoint to a new position — validate distance from walls & obstacles."""
         if not self.waypoint_navigator or index >= len(self.waypoint_navigator.waypoints):
             return
         
-        # Clamp to world bounds
-        wx = min(max(0.2, new_position[0]), self.world.width - 0.2)
-        wy = min(max(0.2, new_position[1]), self.world.height - 0.2)
+        wx, wy = new_position[0], new_position[1]
+        
+        safe, reason = self._is_waypoint_safe(wx, wy)
+        if not safe:
+            print(f"⚠ Không thể di chuyển waypoint: {reason}")
+            return
         
         old_pos = self.waypoint_navigator.waypoints[index]
         self.waypoint_navigator.waypoints[index] = (wx, wy)
@@ -509,10 +541,10 @@ def main_waypoint():
     sim = HILRobocarWaypointSimulation(
         serial_port=serial_port,
         scenario_file=scenario_file,
-        world_width=8.0,
-        world_height=8.0,
-        window_width=800,
-        window_height=800,
+        world_width=12.0,
+        world_height=12.0,
+        window_width=1000,
+        window_height=1000,
         target_fps=60,
         sim_dt=0.02
     )
