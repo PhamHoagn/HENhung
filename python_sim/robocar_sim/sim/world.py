@@ -1,10 +1,21 @@
 """
-HIL Robocar - World Simulation
-Integrates physics, sensors, and obstacles
+HIL Robocar – World Simulation  (v2.0 – 4WD Skid-Steer)
+=========================================================
+Integrates physics, sensors, and obstacles.
+
+The car is now a **FourWheelSkidSteerCar** with:
+    track_width   = 0.22 m
+    wheel_base    = 0.16 m
+    max_speed     = 0.60 m/s
+    lateral_friction = 0.85
+
+This module is a **pure plant** – it executes motor commands
+received from the ESP32 controller and reports sensor data.
+No control / decision logic lives here.
 """
 
 from typing import Tuple
-from .physics import DifferentialDriveCar, CollisionDetector
+from .physics import FourWheelSkidSteerCar, CollisionDetector
 from .sensors import SensorArray
 from .obstacles import ObstacleManager
 
@@ -12,14 +23,14 @@ from .obstacles import ObstacleManager
 class SimulationWorld:
     """
     Complete simulation world for HIL Robocar
-    
+
     Integrates:
-    - Differential drive car physics
-    - Ultrasonic sensor array
+    - 4WD Skid-Steer car physics
+    - 9-beam ultrasonic sensor array
     - Obstacle management
     - Collision detection
     """
-    
+
     def __init__(
         self,
         width: float = 5.0,      # World width (meters)
@@ -30,7 +41,7 @@ class SimulationWorld:
     ):
         """
         Initialize simulation world
-        
+
         Args:
             width: World width in meters
             height: World height in meters
@@ -39,26 +50,29 @@ class SimulationWorld:
         """
         self.width = width
         self.height = height
-        
-        # Initialize car
-        self.car = DifferentialDriveCar(
+
+        # Initialize 4WD skid-steer car
+        self.car = FourWheelSkidSteerCar(
             x=car_x,
             y=car_y,
             theta=car_theta,
-            wheel_base=0.15,
-            max_speed=1.0
+            track_width=0.22,
+            wheel_base=0.16,
+            max_speed=1.00,
+            wheel_radius=0.033,
+            lateral_friction=0.85,
         )
-        
+
         # Initialize sensors
         self.sensors = SensorArray()
-        
+
         # Initialize obstacles
         self.obstacles = ObstacleManager()
         self.obstacles.create_default_scenario(width, height)
-        
-        # Initialize collision detector
-        self.collision_detector = CollisionDetector(robot_radius=0.15)
-        
+
+        # Initialize collision detector (radius covers 4WD chassis)
+        self.collision_detector = CollisionDetector(robot_radius=0.18)
+
         # Simulation state
         self.is_collision = False
         self.total_time = 0.0

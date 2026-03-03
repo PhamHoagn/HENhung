@@ -11,7 +11,7 @@ from typing import Optional, List, Tuple
 
 from .sim.world import SimulationWorld
 from .sim.waypoints import WaypointNavigator
-from .sim.autopilot import WaypointAutopilot
+from .sim.autopilot import SafeStopFallback
 from .render.renderer import SimulationRenderer
 from .io.serial_bridge import SerialBridge
 
@@ -39,7 +39,8 @@ class HILRobocarWaypointSimulation:
         sim_dt: float = 0.02
     ):
         print("═" * 60)
-        print("  HIL ROBOCAR - WAYPOINT NAVIGATION MODE")
+        print("  HIL ROBOCAR – 4WD SKID-STEER + DT AI")
+        print("  Brain: ESP32 Decision-Tree  |  Plant: Python Sim")
         print("═" * 60)
         
         self.sim_dt = sim_dt
@@ -118,7 +119,7 @@ class HILRobocarWaypointSimulation:
         self.serial = SerialBridge(port=serial_port, baudrate=115200, timeout=0.05)
         
         if not self.serial.connect(auto_detect=True):
-            print("⚠ WARNING: No ESP32 - Open loop mode")
+            print("⚠ WARNING: No ESP32 – Safe-stop fallback (no AI brain)")
             self.serial = None
         
         # Runtime state
@@ -128,10 +129,10 @@ class HILRobocarWaypointSimulation:
         self.simulation_time = 0.0
         self.frame_count = 0
         self.start_pos = (car_x, car_y, car_heading)
-        self.autopilot = WaypointAutopilot(max_speed=0.35)  # Reduced speed for safer navigation
+        self.autopilot = SafeStopFallback()  # minimal safe-stop when ESP32 absent
         
         print("\n" + "═" * 60)
-        print("  ✓ WAYPOINT NAVIGATION READY")
+        print("  ✓ 4WD HIL SIMULATION READY")
         print("═" * 60 + "\n")
     
     def run(self):
@@ -272,7 +273,9 @@ class HILRobocarWaypointSimulation:
                 if self.serial and self.serial.is_connected:
                     motor_commands = self.serial.receive_motor_commands()
 
-                # Fallback autopilot if serial is not connected
+                # Fallback safe-stop if ESP32 is not connected.
+                # The ESP32 is the SOLE autonomous brain; Python only
+                # provides a minimal creep / stop for debugging visibility.
                 if motor_commands is None:
                     current_wp = None
                     if self.waypoint_navigator:
@@ -316,8 +319,16 @@ class HILRobocarWaypointSimulation:
                     'dRF': dRF,      # Right far (60°)
                     'dLS': dLS,      # Left side (90°)
                     'dRS': dRS,      # Right side (90°)
-                    'serial_connected': serial_connected
+                    'serial_connected': serial_connected,
                 }
+
+                # Attach AI telemetry from the last ESP32 response
+                if self.serial and self.serial.last_motor_response:
+                    resp = self.serial.last_motor_response
+                    telemetry['esp_mode'] = resp.mode
+                    telemetry['ai_action'] = resp.ai_action
+                    telemetry['ai_speed'] = resp.ai_speed
+                    telemetry['ai_ms'] = resp.ai_ms
                 
                 self.renderer.render_frame(
                     car_pos=(car_x, car_y),
@@ -332,14 +343,30 @@ class HILRobocarWaypointSimulation:
                     waypoint_edit_mode=self.waypoint_edit_mode
                 )
                 
-                # Collision detection
+                # Collision detection — push car back instead of full reset
+                # so the ESP32 / fallback can use its recovery logic
                 if self.world.is_crashed():
-                    print(f"\n⚠ VA CHẠM tại t={self.simulation_time:.2f}s")
-                    self.world.reset(*self.start_pos)
-                    if self.waypoint_navigator:
-                        self.waypoint_navigator.reset()
-                    self.autopilot.reset()
-                    print("  ✓ Reset\n")
+                    self._collision_count = getattr(self, '_collision_count', 0) + 1
+                    if self._collision_count == 1:
+                        print(f"\n⚠ VA CHẠM tại t={self.simulation_time:.2f}s — pushing back")
+                    # Push car backwards along its heading to escape collision
+                    cx, cy = car_state['position']
+                    push = 0.12  # push back 12 cm
+                    new_x = cx - push * math.cos(car_heading)
+                    new_y = cy - push * math.sin(car_heading)
+                    self.world.car.state.x = max(0.3, min(self.world.width - 0.3, new_x))
+                    self.world.car.state.y = max(0.3, min(self.world.height - 0.3, new_y))
+                    self.world.is_collision = False
+                    # Hard reset only after 30 consecutive collision frames
+                    if self._collision_count >= 30:
+                        print(f"  ⚠ Stuck! Full reset.\n")
+                        self.world.reset(*self.start_pos)
+                        if self.waypoint_navigator:
+                            self.waypoint_navigator.reset()
+                        self.autopilot.reset()
+                        self._collision_count = 0
+                else:
+                    self._collision_count = 0
                 
                 self.frame_count += 1
                 
@@ -461,16 +488,26 @@ class HILRobocarWaypointSimulation:
 
 def main_waypoint():
     """Entry point for waypoint navigation"""
+    import argparse
+    parser = argparse.ArgumentParser(description="HIL Robocar 4WD Simulation")
+    parser.add_argument("--port", type=str, default=None,
+                        help="COM port for ESP32 (e.g. COM7). Default: auto-detect")
+    parser.add_argument("--scenario", type=str, default=None,
+                        help="Path to scenario YAML file")
+    args, _ = parser.parse_known_args()
+
     # Get scenario file
-    scenario_file = os.environ.get('SCENARIO_FILE')
+    scenario_file = args.scenario or os.environ.get('SCENARIO_FILE')
     if not scenario_file:
         # Default scenario
         script_dir = os.path.dirname(os.path.abspath(__file__))
         scenario_file = os.path.join(script_dir, 'scenarios', 'demo_waypoints.yaml')
+
+    serial_port = args.port or os.environ.get('SERIAL_PORT')
     
     # Create simulation
     sim = HILRobocarWaypointSimulation(
-        serial_port=None,  # Auto-detect
+        serial_port=serial_port,
         scenario_file=scenario_file,
         world_width=8.0,
         world_height=8.0,

@@ -59,7 +59,7 @@ Send wheel commands and debug/telemetry from embedded AI.
 ### Format
 
 ```json
-{"t": 12350, "vL": 0.22, "vR": 0.28, "mode": "FOLLOW", "ai_b": -0.18, "ai_s": 0.86, "ai_ms": 0.31}
+{"t": 12350, "vL": 0.22, "vR": 0.28, "mode": "FOLLOW", "ai_a": 1, "ai_s": 0.86, "ai_ms": 0.31}
 ```
 
 ### Fields
@@ -69,8 +69,8 @@ Send wheel commands and debug/telemetry from embedded AI.
 | `t` | int | ms | ESP32 timestamp |
 | `vL`,`vR` | float | normalized | Left/right wheel command |
 | `mode` | string | - | `FOLLOW | AVOID | STOP | RECOVERY` |
-| `ai_b` | float | - | AI turn bias in `[-1,1]` |
-| `ai_s` | float | - | AI speed scale in `[0,1]` |
+| `ai_a` | int | - | DT action class `{0=FWD,1=FWD-L,2=FWD-R,3=TURN-L,4=TURN-R}` |
+| `ai_s` | float | - | DT speed scale in `[0,1]` |
 | `ai_ms` | float | ms | Latest inference time |
 
 ---

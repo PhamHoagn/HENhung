@@ -1,0 +1,21 @@
+{
+  "classifier_depth": 8,
+  "classifier_leaves": 199,
+  "classifier_accuracy": 0.8652,
+  "regressor_depth": 6,
+  "regressor_leaves": 44,
+  "regressor_mae": 0.0478,
+  "training_samples": 32000,
+  "test_samples": 8000,
+  "features": [
+    "dLS",
+    "dLF",
+    "dLM",
+    "dLN",
+    "dC",
+    "dRN",
+    "dRM",
+    "dRF",
+    "dRS"
+  ]
+}

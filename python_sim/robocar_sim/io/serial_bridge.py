@@ -7,7 +7,7 @@ import serial
 import serial.tools.list_ports
 import time
 from typing import Optional, Tuple, List
-from .protocol import SerialProtocol
+from .protocol import SerialProtocol, MotorResponse
 
 
 class SerialBridge:
@@ -48,6 +48,9 @@ class SerialBridge:
         self.messages_sent = 0
         self.messages_received = 0
         self.last_receive_time = 0.0
+
+        # Latest AI telemetry from ESP32
+        self.last_motor_response: Optional[MotorResponse] = None
     
     def connect(self, auto_detect: bool = True) -> bool:
         """
@@ -185,7 +188,11 @@ class SerialBridge:
     
     def receive_motor_commands(self) -> Optional[Tuple[float, float]]:
         """
-        Receive motor commands from ESP32 (non-blocking)
+        Receive motor commands from ESP32 (non-blocking).
+
+        Drains ALL pending lines and returns the LATEST valid command
+        to prevent stale-buffer lag.  Also stores the full MotorResponse
+        (with AI telemetry) in ``self.last_motor_response`` for the HUD.
         
         Returns:
             (v_left, v_right) or None if no valid data available
@@ -194,33 +201,39 @@ class SerialBridge:
             return None
         
         try:
-            # Check if data available
-            if self.serial_conn.in_waiting == 0:
-                return None
-            
-            # Read one line (until '\n')
-            line = self.serial_conn.readline().decode('utf-8', errors='ignore')
-            
-            if not line:
-                return None
-            
-            # Update statistics
-            self.bytes_received += len(line)
-            self.last_receive_time = time.time()
-            
-            # Decode motor commands
-            motor_cmds = self.protocol.decode_motor_commands(line)
-            
-            if motor_cmds is not None:
-                self.messages_received += 1
-            
-            return motor_cmds
+            result: Optional[Tuple[float, float]] = None
+
+            # Drain all buffered lines — keep the LATEST valid one
+            while self.serial_conn.in_waiting > 0:
+                line = self.serial_conn.readline().decode('utf-8', errors='ignore')
+                if not line:
+                    break
+
+                self.bytes_received += len(line)
+
+                # Try rich decode first
+                resp = self.protocol.decode_motor_response(line)
+                if resp is not None:
+                    self.last_motor_response = resp
+                    self.messages_received += 1
+                    self.last_receive_time = time.time()
+                    result = resp.motor_tuple
+                    continue
+
+                # Fallback: legacy (vL, vR) only
+                motor_cmds = self.protocol.decode_motor_commands(line)
+                if motor_cmds is not None:
+                    self.messages_received += 1
+                    self.last_receive_time = time.time()
+                    result = motor_cmds
+
+            return result
         
         except serial.SerialException as e:
             print(f"ERROR: Failed to receive data: {e}")
             self.is_connected = False
             return None
-        except Exception as e:
+        except Exception:
             # Ignore other errors (malformed data, etc.)
             return None
     

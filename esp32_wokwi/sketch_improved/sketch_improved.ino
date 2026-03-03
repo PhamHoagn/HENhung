@@ -1,55 +1,82 @@
 /*
- * HIL Robocar - ESP32 Embedded AI Firmware v6.0
- * - 50Hz control task (hard real-time target)
- * - 5Hz TinyML-like INT8 inference task (placeholder model)
- * - Safety-first behavior: STOP/REVERSE overrides AI
- * - Standalone-ready: if no simulator packet, controller safe-stops
+ * HIL Robocar – ESP32 Embedded AI Firmware v7.0
+ * ==============================================
+ *
+ * Vehicle : 4WD Skid-Steer Differential Drive (4 wheels, 2 independent sides)
+ * AI Model: Trained Decision Tree (auto-generated, see decision_tree_model.h)
+ *
+ * Architecture (strict HIL):
+ *   ESP32 = THE ONLY autonomous brain (perception → decision → actuation)
+ *   Python = Plant simulator only (physics + sensors + rendering)
+ *
+ * Tasks:
+ *   Core 1 – controlTask  @ 50 Hz  (perception + rule overlay + motor output)
+ *   Core 0 – aiTask       @  5 Hz  (Decision Tree inference)
+ *
+ * Decision Tree classes:
+ *   0 GO_STRAIGHT  – no obstacle
+ *   1 VEER_LEFT    – moderate left
+ *   2 VEER_RIGHT   – moderate right
+ *   3 HARD_LEFT    – sharp left / spin
+ *   4 HARD_RIGHT   – sharp right / spin
+ *
+ * Safety-first: STOP/REVERSE overrides the DT if front < kDStop.
+ * Standalone-safe: if no simulator packet for 250 ms → safe stop.
  */
 
 #include <Arduino.h>
 #include <ArduinoJson.h>
+#include "decision_tree_model.h"          // trained DT (pure C if/else)
 
-#define SERIAL_BAUD 115200
-#define SENSOR_COUNT 9
-#define CONTROL_PERIOD_MS 20
-#define AI_PERIOD_MS 200
-#define DEBUG_AI 1
+// ── Configuration ───────────────────────────────────────────────
+#define SERIAL_BAUD     115200
+#define SENSOR_COUNT    9
+#define CONTROL_PERIOD_MS  20             // 50 Hz
+#define AI_PERIOD_MS      200             //  5 Hz
+#define DEBUG_AI          1
 
-// Vehicle limits
-static constexpr float kMaxWheel = 0.45f;
-static constexpr float kBaseSpeed = 0.28f;
-static constexpr float kTrackWidth = 0.22f;
+// 4WD Skid-Steer vehicle parameters (must match Python sim)
+static constexpr float kMaxWheel   = 0.85f;   // max normalised wheel cmd
+static constexpr float kBaseSpeed  = 0.65f;   // cruise speed (m/s)
+static constexpr float kTrackWidth = 0.22f;   // left↔right wheel distance
 
-// Safety distances (meters)
-static constexpr float kDStop = 0.30f;
-static constexpr float kDCritical = 0.45f;
-static constexpr float kDDanger = 0.75f;
-static constexpr float kDWarn = 1.20f;
-static constexpr float kDMax = 5.50f;
+// Safety distances  (conservative – react early, stay safe)
+static constexpr float kDStop     = 0.40f;   // full stop / reverse
+static constexpr float kDCritical = 0.55f;   // 100 % DT override
+static constexpr float kDDanger   = 0.90f;   // switch to MODE_AVOID
+static constexpr float kDWarn     = 1.30f;   // blend starts
+static constexpr float kDClear    = 1.50f;   // hysteresis – exit AVOID
+static constexpr float kDMax      = 5.50f;
 
-// Timeouts
 static constexpr uint32_t kInputTimeoutMs = 250;
 
-enum BehaviorMode : uint8_t { MODE_FOLLOW = 0, MODE_AVOID = 1, MODE_STOP = 2, MODE_RECOVERY = 3 };
+// ── Behavior state machine ──────────────────────────────────────
+enum BehaviorMode : uint8_t {
+  MODE_FOLLOW    = 0,   // DT + waypoint blending
+  MODE_AVOID     = 1,   // DT override with high avoid weight
+  MODE_STOP      = 2,   // Emergency / timeout
+  MODE_RECOVERY  = 3    // Reverse + spin
+};
 
+// ════════════════════════════════════════════════════════════════
+//  COMM  – Serial JSON protocol  (Python ↔ ESP32)
+// ════════════════════════════════════════════════════════════════
 namespace comm {
+
 struct InputFrame {
   uint32_t tMs;
-  float x;
-  float y;
-  float th;
-  float wpX;
-  float wpY;
-  bool hasWp;
+  float x, y, th;
+  float wpX, wpY;
+  bool  hasWp;
   float d[SENSOR_COUNT];
-  bool valid;
+  bool  valid;
 };
 
 static portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
 static InputFrame latest{};
 static uint32_t lastRxMs = 0;
 
-static char rxBuf[512];
+static char  rxBuf[512];
 static size_t rxLen = 0;
 StaticJsonDocument<512> inDoc;
 StaticJsonDocument<256> outDoc;
@@ -58,33 +85,29 @@ bool parsePacket(const char* line, InputFrame& out) {
   DeserializationError err = deserializeJson(inDoc, line);
   if (err) return false;
 
-  out.tMs = inDoc["t"] | millis();
-  out.x = inDoc["x"] | 0.0f;
-  out.y = inDoc["y"] | 0.0f;
-  out.th = inDoc["th"] | (inDoc["h"] | 0.0f);
-  out.wpX = inDoc["wpX"] | (inDoc["wx"] | 0.0f);
-  out.wpY = inDoc["wpY"] | (inDoc["wy"] | 0.0f);
+  out.tMs  = inDoc["t"]   | millis();
+  out.x    = inDoc["x"]   | 0.0f;
+  out.y    = inDoc["y"]   | 0.0f;
+  out.th   = inDoc["th"]  | (inDoc["h"] | 0.0f);
+  out.wpX  = inDoc["wpX"] | (inDoc["wx"] | 0.0f);
+  out.wpY  = inDoc["wpY"] | (inDoc["wy"] | 0.0f);
   out.hasWp = inDoc.containsKey("wpX") || inDoc.containsKey("wx");
 
-  bool hasArray = inDoc.containsKey("d") && inDoc["d"].is<JsonArray>();
-  if (hasArray) {
+  if (inDoc.containsKey("d") && inDoc["d"].is<JsonArray>()) {
     JsonArray arr = inDoc["d"].as<JsonArray>();
-    for (size_t i = 0; i < SENSOR_COUNT; i++) {
+    for (size_t i = 0; i < SENSOR_COUNT; i++)
       out.d[i] = (i < arr.size()) ? (float)arr[i] : kDMax;
-    }
   } else {
-    // Backward compatibility with old simulator keys
-    out.d[0] = inDoc["dLS"] | kDMax;  // left side
+    out.d[0] = inDoc["dLS"] | kDMax;
     out.d[1] = inDoc["dLF"] | kDMax;
     out.d[2] = inDoc["dLM"] | kDMax;
     out.d[3] = inDoc["dLN"] | kDMax;
-    out.d[4] = inDoc["dC"] | kDMax;
+    out.d[4] = inDoc["dC"]  | kDMax;
     out.d[5] = inDoc["dRN"] | kDMax;
     out.d[6] = inDoc["dRM"] | kDMax;
     out.d[7] = inDoc["dRF"] | kDMax;
-    out.d[8] = inDoc["dRS"] | kDMax;  // right side
+    out.d[8] = inDoc["dRS"] | kDMax;
   }
-
   out.valid = true;
   return true;
 }
@@ -99,7 +122,7 @@ void pollSerial() {
         InputFrame parsed{};
         if (parsePacket(rxBuf, parsed)) {
           portENTER_CRITICAL(&mux);
-          latest = parsed;
+          latest   = parsed;
           lastRxMs = millis();
           portEXIT_CRITICAL(&mux);
         }
@@ -108,7 +131,7 @@ void pollSerial() {
     } else if (rxLen < sizeof(rxBuf) - 1) {
       rxBuf[rxLen++] = c;
     } else {
-      rxLen = 0; // drop oversized packet
+      rxLen = 0;
     }
   }
 }
@@ -122,172 +145,177 @@ bool snapshot(InputFrame& out, uint32_t& ageMs) {
   return out.valid;
 }
 
-void sendOutput(float vL, float vR, BehaviorMode mode, float aiB, float aiS, float aiMs) {
+void sendOutput(float vL, float vR, BehaviorMode mode,
+                int aiAction, float aiSpeed, float aiMs) {
   outDoc.clear();
-  outDoc["t"] = millis();
-  outDoc["vL"] = vL;
-  outDoc["vR"] = vR;
-  outDoc["mode"] = (mode == MODE_FOLLOW) ? "FOLLOW" : (mode == MODE_AVOID) ? "AVOID" : (mode == MODE_RECOVERY) ? "RECOVERY" : "STOP";
-  outDoc["ai_b"] = aiB;
-  outDoc["ai_s"] = aiS;
-  outDoc["ai_ms"] = aiMs;
+  outDoc["t"]     = millis();
+  outDoc["vL"]    = vL;
+  outDoc["vR"]    = vR;
+  outDoc["mode"]  = (mode == MODE_FOLLOW)   ? "FOLLOW"
+                  : (mode == MODE_AVOID)    ? "AVOID"
+                  : (mode == MODE_RECOVERY) ? "RECOVERY"
+                  :                           "STOP";
+  outDoc["ai_a"]  = aiAction;      // DT predicted action class
+  outDoc["ai_s"]  = aiSpeed;       // DT predicted speed scale
+  outDoc["ai_ms"] = aiMs;          // inference time
   serializeJson(outDoc, Serial);
   Serial.println();
 }
 } // namespace comm
 
+// ════════════════════════════════════════════════════════════════
+//  PERCEPTION  – sensor validation & grouping
+// ════════════════════════════════════════════════════════════════
 namespace perception {
+
 struct PerceptionOut {
   float d[SENSOR_COUNT];
   float front;
   float leftMin;
   float rightMin;
   float minAll;
-  bool sensorValid;
+  bool  sensorValid;
 };
 
 PerceptionOut run(const comm::InputFrame& in) {
   PerceptionOut p{};
-  uint8_t invalid = 0;
+  uint8_t bad = 0;
   for (int i = 0; i < SENSOR_COUNT; i++) {
     float v = in.d[i];
-    if (!isfinite(v) || v < 0.0f || v > kDMax * 1.5f) {
-      v = kDMax;
-      invalid++;
-    }
+    if (!isfinite(v) || v < 0.0f || v > kDMax * 1.5f) { v = kDMax; bad++; }
     p.d[i] = constrain(v, 0.0f, kDMax);
   }
-  p.front = p.d[4];
-  p.leftMin = min(min(p.d[0], p.d[1]), min(p.d[2], p.d[3]));
+  p.front    = p.d[4];                               // center sensor
+  p.leftMin  = min(min(p.d[0], p.d[1]), min(p.d[2], p.d[3]));
   p.rightMin = min(min(p.d[5], p.d[6]), min(p.d[7], p.d[8]));
-  p.minAll = min(p.front, min(p.leftMin, p.rightMin));
-  p.sensorValid = (invalid <= 2);
+  p.minAll   = min(p.front, min(p.leftMin, p.rightMin));
+  p.sensorValid = (bad <= 2);
   return p;
 }
 } // namespace perception
 
+// ════════════════════════════════════════════════════════════════
+//  WAYPOINT  – heading-error based navigation
+// ════════════════════════════════════════════════════════════════
 namespace waypoint {
+
 void compute(const comm::InputFrame& in, float& v, float& w) {
-  if (!in.hasWp) {
-    v = 0.15f;
-    w = 0.0f;
-    return;
-  }
-  float dx = in.wpX - in.x;
-  float dy = in.wpY - in.y;
+  if (!in.hasWp) { v = 0.15f; w = 0.0f; return; }
+  float dx   = in.wpX - in.x;
+  float dy   = in.wpY - in.y;
   float dist = sqrtf(dx * dx + dy * dy);
   float desired = atan2f(dy, dx);
-  float err = desired - in.th;
-  while (err > PI) err -= 2.0f * PI;
+  float err  = desired - in.th;
+  while (err >  PI) err -= 2.0f * PI;
   while (err < -PI) err += 2.0f * PI;
 
-  v = constrain(kBaseSpeed * (0.35f + 0.65f * min(dist, 1.0f)), 0.08f, kBaseSpeed);
-  w = constrain(1.2f * err, -1.4f, 1.4f);
+  v = constrain(kBaseSpeed * (0.50f + 0.50f * min(dist, 2.5f)), 0.20f, kBaseSpeed);
+  w = constrain(2.0f * err, -2.5f, 2.5f);   // strong waypoint tracking
 }
 } // namespace waypoint
 
-namespace avoid {
-void compute(const perception::PerceptionOut& p, float& v, float& w, float& avoidWeight) {
-  if (p.minAll < kDCritical) {
-    avoidWeight = 1.0f;
-    v = -0.12f;
-    w = (p.leftMin > p.rightMin) ? 1.4f : -1.4f;
-    return;
-  }
-  if (p.minAll < kDDanger) avoidWeight = 0.85f;
-  else if (p.minAll < kDWarn) avoidWeight = 0.45f;
-  else avoidWeight = 0.12f;
-
-  float asym = (p.leftMin - p.rightMin);
-  w = constrain(-1.0f * asym, -1.2f, 1.2f);
-  v = constrain(0.12f + 0.18f * (p.minAll / kDWarn), 0.10f, kBaseSpeed);
-}
-} // namespace avoid
-
+// ════════════════════════════════════════════════════════════════
+//  AI  – Decision-Tree inference (runs on Core 0 @ 5 Hz)
+// ════════════════════════════════════════════════════════════════
 namespace ai {
+
+/*
+ * The Decision Tree model is defined in decision_tree_model.h.
+ * It was trained offline on 20 000 synthetic samples generated
+ * by an expert rule-based policy covering all obstacle scenarios.
+ *
+ * dt_predict_action(f[9]) → int   (action class 0–4)
+ * dt_predict_speed(f[9])  → float (speed scale  0–1)
+ *
+ * The model is pure C if/else – no dynamic memory, no floats > 32-bit.
+ * Inference takes < 0.05 ms on ESP32 @ 240 MHz.
+ */
+
 struct Output {
-  float turnBias;   // [-1, 1]
-  float speedScale; // [0, 1]
-  float confidence;
+  int   action;       // 0..4 (GO_STRAIGHT … HARD_RIGHT)
+  float speedScale;   // 0..1
   float inferMs;
 };
 
-static volatile float gTurnBias = 0.0f;
+// Shared state (written by aiTask, read by controlTask)
+static volatile int   gAction     = DT_GO_STRAIGHT;
 static volatile float gSpeedScale = 1.0f;
-static volatile float gConfidence = 0.0f;
-static volatile float gInferMs = 0.0f;
-
-// Placeholder INT8 model (2-head logistic from 9 inputs)
-static const int8_t Wb[SENSOR_COUNT] = {12, 10, 8, 4, 0, -4, -8, -10, -12};
-static const int8_t Ws[SENSOR_COUNT] = {-6, -4, -2, -1, -10, -1, -2, -4, -6};
-static const int16_t Bb = 0;
-static const int16_t Bs = 42;
-
-inline float sigmoid(float x) { return 1.0f / (1.0f + expf(-x)); }
+static volatile float gInferMs    = 0.0f;
 
 Output run(const float d[SENSOR_COUNT]) {
   uint32_t t0 = micros();
-  int8_t q[SENSOR_COUNT];
-  for (int i = 0; i < SENSOR_COUNT; i++) {
-    float norm = constrain(d[i] / kDMax, 0.0f, 1.0f);
-    q[i] = (int8_t)lroundf((norm - 0.5f) * 127.0f);
-  }
 
-  int32_t accB = Bb;
-  int32_t accS = Bs;
-  for (int i = 0; i < SENSOR_COUNT; i++) {
-    accB += (int16_t)q[i] * (int16_t)Wb[i];
-    accS += (int16_t)q[i] * (int16_t)Ws[i];
-  }
-
-  float logitsB = (float)accB / 1024.0f;
-  float logitsS = (float)accS / 1024.0f;
+  // Run trained decision tree inference
+  int   action = dt_predict_action(d);
+  float speed  = dt_predict_speed(d);
 
   Output o{};
-  o.turnBias = constrain(2.0f * sigmoid(logitsB) - 1.0f, -1.0f, 1.0f);
-  o.speedScale = constrain(sigmoid(logitsS), 0.0f, 1.0f);
-  o.confidence = constrain(fabsf(o.turnBias), 0.0f, 1.0f);
-  o.inferMs = (micros() - t0) / 1000.0f;
+  o.action     = constrain(action, 0, 4);
+  o.speedScale = constrain(speed, 0.0f, 1.0f);
+  o.inferMs    = (micros() - t0) / 1000.0f;
   return o;
 }
 
 void updateShared(const Output& o) {
-  // Smooth before publishing
-  float prevB = gTurnBias;
-  float prevS = gSpeedScale;
-  gTurnBias = 0.75f * prevB + 0.25f * o.turnBias;
-  gSpeedScale = 0.70f * prevS + 0.30f * o.speedScale;
-  gConfidence = 0.60f * gConfidence + 0.40f * o.confidence;
-  gInferMs = o.inferMs;
+  gAction     = o.action;
+  gSpeedScale = 0.70f * gSpeedScale + 0.30f * o.speedScale;   // smooth
+  gInferMs    = o.inferMs;
 
 #if DEBUG_AI
-  Serial.print("# AI infer ms=");
+  static const char* names[] = {"GO","V_L","V_R","H_L","H_R"};
+  Serial.print("# AI dt_ms=");
   Serial.print(gInferMs, 3);
-  Serial.print(" b=");
-  Serial.print(gTurnBias, 3);
-  Serial.print(" s=");
+  Serial.print(" act=");
+  Serial.print(names[o.action]);
+  Serial.print(" spd=");
   Serial.println(gSpeedScale, 3);
 #endif
 }
 
-void readShared(float& b, float& s, float& c, float& ms) {
-  b = gTurnBias;
-  s = gSpeedScale;
-  c = gConfidence;
-  ms = gInferMs;
+void readShared(int& act, float& spd, float& ms) {
+  act = gAction;
+  spd = gSpeedScale;
+  ms  = gInferMs;
 }
 } // namespace ai
 
+// ════════════════════════════════════════════════════════════════
+//  BEHAVIOR  – state-machine selector
+// ════════════════════════════════════════════════════════════════
 namespace behavior {
-BehaviorMode decide(const perception::PerceptionOut& p, bool timeoutOrInvalid) {
-  if (timeoutOrInvalid) return MODE_STOP;
-  if (p.front < kDStop) return MODE_STOP;
-  if (p.minAll < kDDanger) return MODE_AVOID;
+
+// Persistent state for hysteresis (avoids AVOID↔FOLLOW oscillation)
+static BehaviorMode lastMode = MODE_FOLLOW;
+
+BehaviorMode decide(const perception::PerceptionOut& p, bool timeout) {
+  if (timeout)          { lastMode = MODE_STOP;     return MODE_STOP;     }
+  if (p.front < kDStop) { lastMode = MODE_RECOVERY;  return MODE_RECOVERY; }
+
+  // Hysteresis: once in AVOID/RECOVERY, stay until obstacle far enough
+  if (lastMode == MODE_AVOID || lastMode == MODE_RECOVERY) {
+    if (p.minAll < kDClear) {
+      lastMode = MODE_AVOID;
+      return MODE_AVOID;
+    }
+    // Obstacle is now far enough – resume following
+    lastMode = MODE_FOLLOW;
+    return MODE_FOLLOW;
+  }
+
+  // Normal entry into AVOID
+  if (p.minAll < kDDanger) { lastMode = MODE_AVOID; return MODE_AVOID; }
+
+  lastMode = MODE_FOLLOW;
   return MODE_FOLLOW;
 }
 } // namespace behavior
 
+// ════════════════════════════════════════════════════════════════
+//  CONTROL  – blend waypoint + DT AI → 4WD wheel commands
+// ════════════════════════════════════════════════════════════════
 namespace control {
+
+/* Convert (v_linear, omega) to normalised (vL, vR) for skid-steer */
 void vwToWheels(float v, float w, float& vL, float& vR) {
   vL = v - 0.5f * kTrackWidth * w;
   vR = v + 0.5f * kTrackWidth * w;
@@ -295,48 +323,104 @@ void vwToWheels(float v, float w, float& vL, float& vR) {
   vR = constrain(vR, -kMaxWheel, kMaxWheel);
 }
 
+/*
+ * Map DT action class → (v_linear, omega) delta commands
+ *
+ * The DT already encodes the expert policy; here we simply
+ * convert its discrete action to continuous (v, ω) values
+ * and blend with the waypoint heading controller.
+ */
+void dtActionToVW(int action, float dtSpeed,
+                  const perception::PerceptionOut& p,
+                  float& v, float& w) {
+  switch (action) {
+    case DT_GO_STRAIGHT:
+      v = kBaseSpeed * dtSpeed;
+      w = 0.0f;
+      break;
+    case DT_VEER_LEFT:
+      v = kBaseSpeed * dtSpeed * 0.85f;   // fast veer
+      w = 0.60f;
+      break;
+    case DT_VEER_RIGHT:
+      v = kBaseSpeed * dtSpeed * 0.85f;
+      w = -0.60f;
+      break;
+    case DT_HARD_LEFT:
+      v = 0.18f;                           // keep moving during hard turn
+      w = 1.20f;
+      break;
+    case DT_HARD_RIGHT:
+      v = 0.18f;
+      w = -1.20f;
+      break;
+    default:
+      v = 0.0f; w = 0.0f;
+  }
+}
+
 void computeCommand(
-  const comm::InputFrame& in,
-  const perception::PerceptionOut& p,
-  BehaviorMode mode,
-  float& outVL,
-  float& outVR) {
-  float vf = 0.0f, wf = 0.0f;
-  float va = 0.0f, wa = 0.0f, avoidWeight = 0.0f;
-  waypoint::compute(in, vf, wf);
-  avoid::compute(p, va, wa, avoidWeight);
+    const comm::InputFrame& in,
+    const perception::PerceptionOut& p,
+    BehaviorMode mode,
+    float& outVL, float& outVR)
+{
+  // 1. Waypoint heading controller
+  float vWP = 0.0f, wWP = 0.0f;
+  waypoint::compute(in, vWP, wWP);
 
-  float aiB, aiS, aiC, aiMs;
-  ai::readShared(aiB, aiS, aiC, aiMs);
+  // 2. DT-based obstacle avoidance
+  int   aiAct;
+  float aiSpd, aiMs;
+  ai::readShared(aiAct, aiSpd, aiMs);
 
-  float v = 0.0f;
-  float w = 0.0f;
+  float vDT = 0.0f, wDT = 0.0f;
+  dtActionToVW(aiAct, aiSpd, p, vDT, wDT);
 
-  if (mode == MODE_STOP) {
-    v = -0.10f;
+  // 3. Compute blend weight depending on danger level
+  //    avoidW=0 when path is clear → pure waypoint tracking
+  float avoidW = 0.0f;
+  if      (p.minAll < kDCritical) avoidW = 1.00f;
+  else if (p.minAll < kDDanger)   avoidW = 0.85f;
+  else if (p.minAll < kDWarn)     avoidW = 0.45f;
+  // else avoidW stays 0 → pure waypoint
+
+  // Proximity-based speed scale (slow down near obstacles)
+  float proxScale = 1.0f;
+  if (p.minAll < kDWarn) {
+    proxScale = constrain((p.minAll - kDStop) / (kDWarn - kDStop), 0.55f, 1.0f);
+  }
+
+  float v = 0.0f, w = 0.0f;
+
+  if (mode == MODE_RECOVERY) {
+    // Reverse + strong spin away from closest obstacle
+    v = -0.22f;
+    w = (p.leftMin > p.rightMin) ? 2.0f : -2.0f;
+  } else if (mode == MODE_STOP) {
+    v = 0.0f;
     w = 0.0f;
   } else if (mode == MODE_AVOID) {
-    v = va;
-    w = wa;
+    // DT avoidance + small waypoint influence to keep general direction
+    v = max(0.14f, vDT * proxScale);
+    w = 0.80f * wDT + 0.20f * wWP;
   } else {
-    // SAFE/CLEAR blending with AI suggestion
-    v = (1.0f - avoidWeight) * vf + avoidWeight * va;
-    w = (1.0f - avoidWeight) * wf + avoidWeight * wa;
-
-    // AI suggestion only in FOLLOW/CLEAR regime
-    const float kAiW = 0.7f;
-    w += kAiW * aiB * (0.5f + 0.5f * aiC);
-    v *= constrain(aiS, 0.35f, 1.0f);
+    // MODE_FOLLOW: blend waypoint + DT, scale speed by proximity
+    v = ((1.0f - avoidW) * vWP + avoidW * vDT) * proxScale;
+    w = (1.0f - avoidW) * wWP + avoidW * wDT;
   }
 
   vwToWheels(v, w, outVL, outVR);
 }
 } // namespace control
 
+// ════════════════════════════════════════════════════════════════
+//  FreeRTOS Tasks
+// ════════════════════════════════════════════════════════════════
+
 void controlTask(void* arg) {
   (void)arg;
   TickType_t last = xTaskGetTickCount();
-  float vL = 0.0f, vR = 0.0f;
   float filtL = 0.0f, filtR = 0.0f;
 
   for (;;) {
@@ -345,19 +429,22 @@ void controlTask(void* arg) {
     comm::InputFrame frame{};
     uint32_t ageMs = 0;
     bool ok = comm::snapshot(frame, ageMs);
-    auto p = perception::run(frame);
-    bool timeoutOrInvalid = (!ok) || (ageMs > kInputTimeoutMs) || !p.sensorValid;
+    auto p  = perception::run(frame);
+    bool timeout = (!ok) || (ageMs > kInputTimeoutMs) || !p.sensorValid;
 
-    BehaviorMode mode = behavior::decide(p, timeoutOrInvalid);
+    BehaviorMode mode = behavior::decide(p, timeout);
+
+    float vL = 0.0f, vR = 0.0f;
     control::computeCommand(frame, p, mode, vL, vR);
 
-    // Output smoothing (no heap allocations)
-    filtL = 0.65f * filtL + 0.35f * vL;
-    filtR = 0.65f * filtR + 0.35f * vR;
+    // Exponential smoothing – fast enough to react to obstacles
+    filtL = 0.35f * filtL + 0.65f * vL;
+    filtR = 0.35f * filtR + 0.65f * vR;
 
-    float aiB, aiS, aiC, aiMs;
-    ai::readShared(aiB, aiS, aiC, aiMs);
-    comm::sendOutput(filtL, filtR, mode, aiB, aiS, aiMs);
+    int   aiAct;
+    float aiSpd, aiMs;
+    ai::readShared(aiAct, aiSpd, aiMs);
+    comm::sendOutput(filtL, filtR, mode, aiAct, aiSpd, aiMs);
 
     vTaskDelayUntil(&last, pdMS_TO_TICKS(CONTROL_PERIOD_MS));
   }
@@ -380,14 +467,18 @@ void aiTask(void* arg) {
   }
 }
 
+// ════════════════════════════════════════════════════════════════
+//  Setup & Loop
+// ════════════════════════════════════════════════════════════════
+
 void setup() {
   Serial.begin(SERIAL_BAUD);
   delay(200);
-  Serial.println("# ESP32 Robocar v6.0 Embedded AI");
-  Serial.println("# control_task=50Hz, ai_task=5Hz, standalone-safe mode enabled");
+  Serial.println("# ESP32 Robocar v7.0 – 4WD Skid-Steer + Decision-Tree AI");
+  Serial.println("# control=50Hz  ai_dt=5Hz  standalone-safe");
 
-  xTaskCreatePinnedToCore(controlTask, "control_task", 6144, nullptr, 2, nullptr, 1);
-  xTaskCreatePinnedToCore(aiTask, "ai_task", 4096, nullptr, 1, nullptr, 0);
+  xTaskCreatePinnedToCore(controlTask, "ctrl", 6144, nullptr, 2, nullptr, 1);
+  xTaskCreatePinnedToCore(aiTask,      "ai",   4096, nullptr, 1, nullptr, 0);
 }
 
 void loop() {

@@ -482,7 +482,7 @@ class SimulationRenderer:
         
         # Semi-transparent background with rounded corners
         hud_width = 340
-        hud_height = 340 if waypoints else 260  # Increased for 9 sensors
+        hud_height = 400 if waypoints else 320  # Increased for AI telemetry + 9 sensors
         hud_surface = pygame.Surface((hud_width, hud_height), pygame.SRCALPHA)
         pygame.draw.rect(hud_surface, (0, 0, 0, 220), (0, 0, hud_width, hud_height), border_radius=10)
         pygame.draw.rect(hud_surface, (100, 100, 100, 180), (0, 0, hud_width, hud_height), 2, border_radius=10)
@@ -500,7 +500,7 @@ class SimulationRenderer:
         dRS = telemetry.get('dRS', 0)     # Right side 90°
         
         lines = [
-            ("🚗 HIL ROBOCAR", Colors.YELLOW, True),
+            ("🚗 4WD SKID-STEER + DT AI", Colors.YELLOW, True),
             ("", Colors.WHITE, False),
             (f"⏱ Time: {telemetry.get('time', 0.0):.1f}s | FPS: {self.actual_fps:.0f}", Colors.WHITE, False),
             (f"📍 Pos: ({telemetry.get('x', 0):.2f}, {telemetry.get('y', 0):.2f})m", Colors.WHITE, False),
@@ -544,6 +544,18 @@ class SimulationRenderer:
                 lines.append((f"  Target: ({wp[0]:.1f}, {wp[1]:.1f})", Colors.YELLOW, False))
                 lines.append((f"  Dist: {dist:.2f}m", Colors.YELLOW, False))
 
+        # Add AI telemetry from ESP32
+        ai_action = telemetry.get('ai_action', -1)
+        esp_mode = telemetry.get('esp_mode', '')
+        ai_ms = telemetry.get('ai_ms', 0.0)
+        if ai_action >= 0:
+            action_names = {0: "FWD", 1: "FWD-L", 2: "FWD-R", 3: "TURN-L", 4: "TURN-R"}
+            act_name = action_names.get(ai_action, f"?{ai_action}")
+            lines.append(("", Colors.WHITE, False))
+            lines.append(("🤖 ESP32 AI (Decision Tree)", Colors.ORANGE, True))
+            lines.append((f"  Mode: {esp_mode}  Act: {act_name}", Colors.WHITE, False))
+            lines.append((f"  AI infer: {ai_ms:.1f}ms", Colors.WHITE, False))
+
         lines.append(("", Colors.WHITE, False))
         lines.append(("⌨️  CONTROLS", Colors.PURPLE, True))
         lines.append(("  SPACE=Pause | R=Reset | M=Waypoint", Colors.LIGHT_GRAY, False))
@@ -570,7 +582,7 @@ class SimulationRenderer:
         serial_status = telemetry.get('serial_connected', False)
         status_color = Colors.GREEN if serial_status else Colors.ORANGE
         status_icon = "🔗" if serial_status else "🔌"
-        status_text = "ESP32 Connected" if serial_status else "No ESP32 (Autopilot)"
+        status_text = "ESP32 DT-AI Connected" if serial_status else "No ESP32 (Safe-Stop)"
         
         # Background for status
         status_bg = pygame.Surface((200, 24), pygame.SRCALPHA)
