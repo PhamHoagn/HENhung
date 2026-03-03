@@ -157,13 +157,15 @@ class SerialBridge:
                     d_left_far, d_right_far, d_left_side, d_right_side,
                     waypoint_x, waypoint_y, car_heading,
                     car_x if car_x is not None else 0.0,
-                    car_y if car_y is not None else 0.0
+                    car_y if car_y is not None else 0.0,
+                    timestamp_s=time.time()
                 )
             else:
                 # Basic sensor data only
                 json_str = self.protocol.encode_sensor_data(
                     d_center, d_left_near, d_right_near, d_left_mid, d_right_mid,
-                    d_left_far, d_right_far, d_left_side, d_right_side
+                    d_left_far, d_right_far, d_left_side, d_right_side,
+                    timestamp_s=time.time()
                 )
             
             # Send to ESP32
