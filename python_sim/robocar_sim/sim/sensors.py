@@ -118,6 +118,13 @@ class UltrasonicSensor:
         if min_distance < self.min_range:
             min_distance = self.max_range  # Too close, sensor can't detect
         
+        # Always compute an endpoint so the ray is always visible
+        if closest_hit is None:
+            closest_hit = (
+                sensor_x + min_distance * math.cos(sensor_angle),
+                sensor_y + min_distance * math.sin(sensor_angle)
+            )
+        
         ray.hit_distance = min_distance
         ray.hit_point = closest_hit
         ray.length = min_distance

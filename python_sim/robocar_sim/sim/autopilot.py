@@ -75,15 +75,13 @@ class SafeStopFallback:
             # Spin away from closest side
             target_w = 2.0 if d_left > d_right else -2.0
         elif self._avoiding:
-            # ── Active avoidance ──
-            # Base avoidance: pick direction away from closest obstacle
+            # ── Active avoidance ── keep good speed, just steer hard
             bias_w = 0.0
             if d_left < self.DANGER_DIST or d_right < self.DANGER_DIST:
-                bias_w = 1.0 if d_left < d_right else -1.0  # steer AWAY
+                bias_w = 1.2 if d_left < d_right else -1.2
             elif dC < self.DANGER_DIST:
-                bias_w = 0.9 if d_left > d_right else -0.9
+                bias_w = 1.0 if d_left > d_right else -1.0
 
-            # Blend lightly with waypoint heading to keep general direction
             wp_w = 0.0
             if waypoint is not None:
                 dx = waypoint[0] - car_pos[0]
@@ -93,10 +91,11 @@ class SafeStopFallback:
 
             target_w = 0.75 * bias_w + 0.25 * wp_w
 
-            # Proportional speed: very slow when close
-            prox = max(0.0, (fwd_min - self.EMERGENCY_DIST)
-                       / (self.CAUTION_DIST - self.EMERGENCY_DIST))
-            target_v = 0.15 + 0.35 * prox               # 0.15–0.50 m/s
+            # Only slow down when VERY close, otherwise keep ~80% speed
+            if fwd_min < 0.55:
+                target_v = self.MAX_SPEED * 0.45
+            else:
+                target_v = self.MAX_SPEED * 0.80
         elif waypoint is not None:
             # ── Normal waypoint tracking ──
             dx = waypoint[0] - car_pos[0]
@@ -105,16 +104,15 @@ class SafeStopFallback:
             desired = math.atan2(dy, dx)
             err = self._norm_angle(desired - car_heading)
 
-            # Forward speed: ramp up with distance, slow near goal
-            target_v = min(self.MAX_SPEED, 0.20 + 0.60 * dist)
-            # Reduce speed when heading error is large
-            target_v *= max(0.15, 1.0 - 0.7 * min(abs(err) / math.pi, 1.0))
+            # Forward speed: CONSTANT at max, only slow near waypoint arrival
+            target_v = self.MAX_SPEED if dist > 0.5 else self.MAX_SPEED * 0.6
+            # Slight reduction for very large heading error (> 90°) only
+            if abs(err) > math.pi / 2:
+                target_v *= 0.70
 
-            # Speed reduction if obstacle in warning zone
-            if fwd_min < self.CAUTION_DIST:
-                prox = max(0.2, (fwd_min - self.EMERGENCY_DIST)
-                           / (self.CAUTION_DIST - self.EMERGENCY_DIST))
-                target_v *= prox
+            # Speed reduction ONLY when obstacle very close (< 0.55m)
+            if fwd_min < 0.55:
+                target_v *= 0.50
 
             # Steering: proportional controller
             target_w = 2.0 * err
@@ -137,8 +135,8 @@ class SafeStopFallback:
         raw_vl /= mag
         raw_vr /= mag
 
-        # EMA smoothing – fast for avoidance, slower for cruise
-        alpha = 0.60 if self._avoiding else 0.40
+        # EMA smoothing – very fast, near-instant response
+        alpha = 0.80
         self._last_vl = (1 - alpha) * self._last_vl + alpha * raw_vl
         self._last_vr = (1 - alpha) * self._last_vr + alpha * raw_vr
 

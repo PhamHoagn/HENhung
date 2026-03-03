@@ -209,7 +209,7 @@ void compute(const comm::InputFrame& in, float& v, float& w) {
   while (err >  PI) err -= 2.0f * PI;
   while (err < -PI) err += 2.0f * PI;
 
-  v = constrain(kBaseSpeed * (0.50f + 0.50f * min(dist, 2.5f)), 0.20f, kBaseSpeed);
+  v = constrain(kBaseSpeed * (0.60f + 0.40f * min(dist, 2.5f)), 0.30f, kBaseSpeed);
   w = constrain(2.0f * err, -2.5f, 2.5f);   // strong waypoint tracking
 }
 } // namespace waypoint
@@ -382,31 +382,32 @@ void computeCommand(
   float avoidW = 0.0f;
   if      (p.minAll < kDCritical) avoidW = 1.00f;
   else if (p.minAll < kDDanger)   avoidW = 0.85f;
-  else if (p.minAll < kDWarn)     avoidW = 0.45f;
+  else if (p.minAll < kDWarn)     avoidW = 0.30f;
   // else avoidW stays 0 → pure waypoint
 
-  // Proximity-based speed scale (slow down near obstacles)
+  // Speed scale: ONLY reduce when genuinely close (< kDDanger)
+  // Above that → full speed. No premature slowdown.
   float proxScale = 1.0f;
-  if (p.minAll < kDWarn) {
-    proxScale = constrain((p.minAll - kDStop) / (kDWarn - kDStop), 0.55f, 1.0f);
+  if (p.minAll < kDDanger) {
+    proxScale = constrain((p.minAll - kDStop) / (kDDanger - kDStop), 0.60f, 1.0f);
   }
 
   float v = 0.0f, w = 0.0f;
 
   if (mode == MODE_RECOVERY) {
-    // Reverse + strong spin away from closest obstacle
     v = -0.22f;
     w = (p.leftMin > p.rightMin) ? 2.0f : -2.0f;
   } else if (mode == MODE_STOP) {
     v = 0.0f;
     w = 0.0f;
   } else if (mode == MODE_AVOID) {
-    // DT avoidance + small waypoint influence to keep general direction
-    v = max(0.14f, vDT * proxScale);
+    // DT avoidance – slight speed reduction only when close
+    v = max(0.25f, vDT * proxScale);
     w = 0.80f * wDT + 0.20f * wWP;
   } else {
-    // MODE_FOLLOW: blend waypoint + DT, scale speed by proximity
-    v = ((1.0f - avoidW) * vWP + avoidW * vDT) * proxScale;
+    // MODE_FOLLOW: constant cruise speed, only steer
+    // No proxScale here – full speed until MODE_AVOID kicks in
+    v = (1.0f - avoidW) * vWP + avoidW * vDT;
     w = (1.0f - avoidW) * wWP + avoidW * wDT;
   }
 
@@ -437,9 +438,9 @@ void controlTask(void* arg) {
     float vL = 0.0f, vR = 0.0f;
     control::computeCommand(frame, p, mode, vL, vR);
 
-    // Exponential smoothing – fast enough to react to obstacles
-    filtL = 0.35f * filtL + 0.65f * vL;
-    filtR = 0.35f * filtR + 0.65f * vR;
+    // Exponential smoothing – very fast to keep speed responsive
+    filtL = 0.20f * filtL + 0.80f * vL;
+    filtR = 0.20f * filtR + 0.80f * vR;
 
     int   aiAct;
     float aiSpd, aiMs;
