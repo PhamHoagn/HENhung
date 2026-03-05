@@ -1,143 +1,129 @@
-# Hướng Dẫn Waypoint Navigation
+# Hệ Thống Điều Hướng Waypoint
 
-## 🎯 Tổng Quan
-
-Hệ thống hỗ trợ 2 chế độ:
-
-1. **Waypoint Navigation** - Xe di chuyển theo lộ trình định trước + né vật cản
-2. **Free Roam** - Xe tự do di chuyển và né vật cản (chế độ cũ)
+Tài liệu hệ thống waypoint navigation của HIL Robocar.
 
 ---
 
-## 📋 Chế Độ 1: Waypoint Navigation (MỚI)
+## Tổng Quan
 
-### Cách chạy:
+Xe robot di chuyển tự động theo các điểm waypoint được định trước trong file YAML, kết hợp tránh vật cản bằng Decision-Tree AI trên ESP32.
 
-```bash
+### Luồng hoạt động:
+1. Python simulator load waypoints từ YAML scenario
+2. Gửi waypoint hiện tại `(wpX, wpY)` + robot state `(x, y, th)` + 9 sensor distances → ESP32
+3. ESP32 tính toán motor commands dựa trên DT AI + waypoint heading
+4. Khi robot đến gần waypoint (< threshold), chuyển sang waypoint tiếp theo
+5. Lặp lại cho đến khi hoàn thành tất cả waypoints
+
+---
+
+## Chạy Waypoint Mode
+
+```cmd
 cd python_sim
-python run_waypoint_demo.py
+python -m robocar_sim.main_waypoint
 ```
 
-Hoặc:
-
-```bash
-cd python_sim
-set WAYPOINT_MODE=1
-python -m robocar_sim.main
+Chỉ định COM port:
+```cmd
+python -m robocar_sim.main_waypoint --port COM7
 ```
 
-### Cấu hình lộ trình:
+---
 
-Edit file: `python_sim/robocar_sim/scenarios/demo_waypoints.yaml`
+## Scenario Files (YAML)
 
+Scenarios nằm trong `python_sim/robocar_sim/scenarios/`:
+
+### `demo_waypoints.yaml` – 5 waypoints hình vuông
+Default scenario với 5 điểm waypoint tạo thành đường đi hình vuông quanh bản đồ.
+
+### `demo_avoid.yaml` – Obstacle avoidance demo
+Scenario tập trung demo tránh vật cản.
+
+### Format YAML:
 ```yaml
+# Obstacle list
+obstacles:
+  - x: 3.0
+    y: 3.0
+    radius: 0.4
+
+# Waypoint list (sẽ đi theo thứ tự)
 waypoints:
-  - [2.0, 2.0]   # Điểm 1
-  - [6.0, 2.0]   # Điểm 2
-  - [6.0, 6.0]   # Điểm 3
-  - [2.0, 6.0]   # Điểm 4
-  - [2.0, 2.0]   # Về điểm ban đầu
+  - x: 2.0
+    y: 2.0
+  - x: 8.0
+    y: 2.0
+  - x: 8.0
+    y: 8.0
+  - x: 2.0
+    y: 8.0
+  - x: 2.0
+    y: 2.0
 
-waypoint_radius: 0.3   # Bán kính coi như đã đến waypoint
-loop_waypoints: true    # Lặp lại lộ trình
-```
-
-### Flash code mới lên ESP32:
-
-1. Mở Arduino IDE
-2. Mở file: `esp32_wokwi/sketch_waypoint.ino`
-3. Upload lên ESP32
-4. Chạy Python simulation
-
----
-
-## 📋 Chế Độ 2: Free Roam (CŨ)
-
-### Cách chạy:
-
-```bash
-cd python_sim
-python -m robocar_sim.main
-```
-
-Hoặc sử dụng code ESP32 cũ: `esp32_wokwi/sketch/sketch.ino`
-
----
-
-## 🎮 Phím điều khiển:
-
-- **ESC** - Thoát chương trình
-- **R** - Reset xe về vị trí ban đầu
-- **SPACE** - Pause/Resume simulation
-- **W** - Nhảy đến waypoint tiếp theo (manual, chỉ ở chế độ waypoint)
-- **Mũi tên** - Di chuyển manual (override controller)
-
----
-
-## 📁 Files quan trọng:
-
-### Scenarios (Cấu hình):
-- `scenarios/demo_waypoints.yaml` - Lộ trình waypoint
-- `scenarios/demo_avoid.yaml` - Chế độ tránh vật cản thuần túy
-
-### ESP32 Firmware:
-- `esp32_wokwi/sketch_waypoint.ino` - Code mới (waypoint + obstacle)
-- `esp32_wokwi/sketch/sketch.ino` - Code cũ (chỉ obstacle avoidance)
-
-### Python Code:
-- `robocar_sim/sim/waypoints.py` - Waypoint navigation logic
-- `run_waypoint_demo.py` - Script chạy demo waypoint
-
----
-
-## 🔧 Tùy chỉnh hành vi:
-
-### Trong ESP32 (sketch_waypoint.ino):
-
-```cpp
-// Tránh vật cản
-#define SAFE_DISTANCE 0.35        // Khoảng cách bắt đầu tránh
-#define CRITICAL_DISTANCE 0.20    // Khoảng cách dừng khẩn cấp
-#define OBSTACLE_WEIGHT 0.7       // Trọng số tránh vật cản (0-1)
-
-// Navigation
-#define BASE_SPEED 0.55           // Tốc độ cơ bản
-#define TURN_SPEED 0.45           // Tốc độ rẽ
-```
-
-### Trong YAML (demo_waypoints.yaml):
-
-```yaml
-waypoint_radius: 0.3    # Giảm = khó đến waypoint hơn
-loop_waypoints: true    # false = chỉ chạy 1 lần
+# Robot start position
+start:
+  x: 1.0
+  y: 1.0
+  theta: 0.0
 ```
 
 ---
 
-## 💡 Tips:
+## ESP32 Waypoint Handling
 
-1. **Waypoint quá xa nhau** → Xe có thể bị vật cản chặn
-2. **Obstacle_weight cao** (0.7-0.9) → Ưu tiên tránh vật cản
-3. **Obstacle_weight thấp** (0.3-0.5) → Ưu tiên đến waypoint
-4. **Test với ít vật cản trước** → Rồi thêm dần
+Trên ESP32 firmware (`sketch_improved.ino`), waypoint được xử lý như sau:
+
+### Navigation Blending
+```
+Nếu có waypoint (hasWp = true):
+  1. Tính heading error = atan2(wpY - y, wpX - x) - th
+  2. Tính waypoint steering correction
+  3. Blend với DT avoidance output dựa trên danger level:
+     - MODE_FOLLOW: 70% waypoint + 30% DT
+     - MODE_AVOID: 20% waypoint + 80% DT
+     - MODE_STOP/RECOVERY: 100% safety override
+```
+
+### Behavior Modes
+
+| Mode | Điều kiện | Hành vi |
+|------|----------|---------|
+| `FOLLOW` | front > kDWarn (1.30m) | DT + waypoint blending |
+| `AVOID` | front < kDDanger (0.90m) | DT override, giảm speed |
+| `STOP` | front < kDStop (0.40m) | Emergency stop/reverse |
+| `RECOVERY` | Stuck detected | Reverse + spin |
 
 ---
 
-## 🐛 Troubleshooting:
+## Waypoint Detection (Python Side)
 
-**Xe không theo waypoint:**
-- Kiểm tra file YAML đúng format
-- Xem log Python có báo "Waypoint mode enabled" không
+Class `WaypointNavigator` trong `python_sim/robocar_sim/sim/waypoints.py`:
 
-**Xe chỉ tránh vật cản, không đi đến waypoint:**
-- Kiểm tra đã upload `sketch_waypoint.ino` chưa
-- Giảm `OBSTACLE_WEIGHT` trong ESP32 code
-
-**Xe bị kẹt:**
-- Tăng `SAFE_DISTANCE`
-- Giảm số lượng vật cản
-- Điều chỉnh vị trí waypoints xa vật cản hơn
+- **Reach threshold**: ~0.30m – robot coi như "đã đến" waypoint khi cách < threshold
+- **Auto-advance**: Tự động chuyển sang waypoint tiếp theo
+- **Progress tracking**: HUD hiển thị "WP 2/5", "WP 3/5", ...
+- **Completion**: Khi hoàn thành waypoint cuối → hiển thị "COMPLETE"
 
 ---
 
-**Made with ❤️ for HIL RobotCar Project**
+## Visual Feedback
+
+Trên cửa sổ pygame:
+- **Waypoint markers**: Hình tròn nhỏ đánh dấu vị trí mỗi waypoint
+- **Current waypoint**: Highlight waypoint đang hướng tới
+- **Path line**: Đường nối giữa các waypoints
+- **HUD info**: Waypoint index, khoảng cách tới waypoint hiện tại
+
+---
+
+## Tuning Tips
+
+| Parameter | File | Mô tả |
+|-----------|------|-------|
+| Waypoint positions | `scenarios/*.yaml` | Vị trí các điểm waypoint |
+| Reach threshold | `waypoints.py` | Khoảng cách coi như "đã đến" |
+| Blend ratio | `sketch_improved.ino` | Tỷ lệ waypoint vs avoidance |
+| Safety distances | `sketch_improved.ino` | kDStop, kDDanger, kDWarn |
+| Base speed | `sketch_improved.ino` | kBaseSpeed (0.65 m/s) |

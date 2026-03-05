@@ -1,74 +1,76 @@
-# Robocar 4 Bánh Tự Hành - HIL Simulation
+# Robocar 4 Bánh Tự Hành – HIL Simulation
 
 **Thiết kế và mô phỏng Robocar 4 bánh tự hành theo lộ trình định trước, tránh vật cản thông minh sử dụng AI nhúng**
 
-Hệ thống Hardware-in-the-Loop (HIL) hoàn chỉnh: ESP32 firmware (chạy trên Wokwi) điều khiển xe robot ảo trong môi trường mô phỏng vật lý Python 2D.
+Hệ thống Hardware-in-the-Loop (HIL) hoàn chỉnh: ESP32 firmware (Wokwi) chạy Decision-Tree AI điều khiển xe robot 4WD trong môi trường mô phỏng vật lý Python 2D.
 
 ---
 
-## 🎯 Tổng Quan Dự Án
+## Tổng Quan Dự Án
 
-Dự án **HIL (Hardware-in-the-Loop)** thực sự:
-- ✅ **ESP32 firmware** - Bộ điều khiển nhúng AI (logic tránh vật cản thông minh)
-- ✅ **Python simulation** - Môi trường vật lý thực tế ảo (physics, sensors, rendering)
-- ✅ **Serial JSON** - Giao thức truyền thông real-time
-- ✅ **Waypoint Navigation** - Điều hướng tự động theo lộ trình định trước
-- ✅ **9-Sensor Array** - Mảng 9 cảm biến siêu âm (7 trước 120° + 2 bên 90°)
-- ✅ **Real-time** - Vận hành 50-60 Hz
+Dự án **HIL (Hardware-in-the-Loop)** gồm hai thành phần chính:
 
-### Tính Năng Minh Họa
-- Quy trình phát triển hệ thống nhúng
-- Phương pháp kiểm thử HIL
-- Giao thức truyền thông real-time
-- Động học robot differential drive
-- Sensor fusion (9 cảm biến siêu âm)
-- Thuật toán điều khiển tránh vật cản thông minh
+- **ESP32 firmware** – Bộ điều khiển nhúng AI (Decision-Tree classifier + regressor, FreeRTOS dual-core)
+- **Python simulator** – Môi trường vật lý 4WD skid-steer, 9 cảm biến siêu âm, rendering 2D
+- **Serial JSON** – Giao thức truyền thông real-time @ 115200 baud
+- **Waypoint Navigation** – Điều hướng tự động theo lộ trình định trước (YAML)
+- **9-Sensor Array** – 7 trước (120° FOV) + 2 bên (90°)
+- **Real-time** – Control loop 50 Hz, AI inference 5 Hz, rendering 60 FPS
+
+### Tính Năng Chính
+
+- Decision-Tree AI nhúng trên ESP32 (depth 6, ~62 leaves, 83% accuracy)
+- 4WD skid-steer kinematics với lateral friction
+- Waypoint navigation + obstacle avoidance thông minh
+- FreeRTOS: Core 0 (AI @ 5 Hz), Core 1 (Control @ 50 Hz)
+- Safety-first: STOP/REVERSE override khi front < 0.40m
+- Anti-stuck mechanism + emergency recovery
 
 ---
 
-## 🏗️ Architecture
+## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                     HIL SYSTEM ARCHITECTURE                      │
+│                 HIL ROBOCAR – 4WD + DT AI  (v2.0)               │
 └─────────────────────────────────────────────────────────────────┘
 
-    ┌─────────────────────┐          Serial/JSON         ┌─────────────────────┐
-    │   ESP32 (Wokwi)     │◄────────────────────────────►│   Python Sim        │
-    │                     │                               │                     │
-    │  ┌───────────────┐  │  {"dF": 1.2, "dL": 0.8}      │  ┌───────────────┐  │
-    │  │  Controller   │  │◄─────────────────────────    │  │   Sensors     │  │
-    │  │    Logic      │  │                               │  │  (Raycast)    │  │
-    │  │  (Obstacle    │  │                               │  └───────────────┘  │
-    │  │  Avoidance)   │  │                               │                     │
-    │  └───────────────┘  │                               │  ┌───────────────┐  │
-    │         │           │                               │  │   Physics     │  │
-    │         v           │                               │  │ (Diff Drive)  │  │
-    │  ┌───────────────┐  │  {"vL": 0.6, "vR": 0.7}      │  └───────────────┘  │
-    │  │ Motor Command │  │─────────────────────────────►│          │          │
-    │  │   Generator   │  │                               │          v          │
-    │  └───────────────┘  │                               │  ┌───────────────┐  │
-    │                     │                               │  │   Renderer    │  │
-    │  Pure Controller    │                               │  │   (pygame)    │  │
-    │  (No Physics)       │                               │  └───────────────┘  │
-    └─────────────────────┘                               └─────────────────────┘
+ ┌─────────────────────────┐    Serial JSON @ 115200    ┌──────────────────────────┐
+ │  ESP32 Controller       │◄──────────────────────────►│  Python Simulator        │
+ │  (Wokwi / real HW)      │                            │  (Plant)                 │
+ │                         │  {"t":ms, "d":[9 floats],  │                          │
+ │  ┌───────────────────┐  │   "x","y","th","wpX","wpY"}│  ┌────────────────────┐  │
+ │  │ Core 0: AI Task   │  │◄──────────────────────────│  │ 9-Beam Sensors     │  │
+ │  │ Decision Tree @5Hz│  │                            │  │ (Raycast)          │  │
+ │  └───────────────────┘  │                            │  └────────────────────┘  │
+ │          │              │                            │                          │
+ │          v              │                            │  ┌────────────────────┐  │
+ │  ┌───────────────────┐  │  {"t":ms, "vL","vR",      │  │ 4WD Skid-Steer     │  │
+ │  │ Core 1: Control   │  │   "mode","ai_a","ai_s"}   │  │ Physics Engine     │  │
+ │  │ Loop @50Hz        │  │──────────────────────────►│  └────────────────────┘  │
+ │  └───────────────────┘  │                            │                          │
+ │                         │                            │  ┌────────────────────┐  │
+ │  Pure Controller        │                            │  │ Renderer (pygame)  │  │
+ │  (No Physics)           │                            │  │ 60 FPS             │  │
+ └─────────────────────────┘                            │  └────────────────────┘  │
+                                                        └──────────────────────────┘
 ```
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
-### Prerequisites
+### Yêu Cầu
 - **Python 3.10+** (with pip)
-- **Wokwi Account** (free) - https://wokwi.com
+- **Wokwi Account** (free) – https://wokwi.com
 - **Windows** (primary), Linux/Mac compatible
 
-### Installation
+### Cài Đặt
 
-1. **Clone the repository**
+1. **Clone repository**
    ```bash
    git clone <your-repo-url>
-   cd hil-robotcar
+   cd HENhung
    ```
 
 2. **Install Python dependencies**
@@ -77,283 +79,242 @@ Dự án **HIL (Hardware-in-the-Loop)** thực sự:
    pip install -r requirements.txt
    ```
 
-3. **Setup ESP32 in Wokwi**
-   - Go to https://wokwi.com
-   - Create new ESP32 project
-   - Copy `esp32_wokwi/sketch.ino` into Wokwi editor
-   - Copy `esp32_wokwi/diagram.json` as circuit diagram
-   - Add **ArduinoJson** library (v6.21+)
+3. **Setup ESP32 trên Wokwi**
+   - Truy cập https://wokwi.com
+   - Tạo project ESP32 mới
+   - Copy nội dung `esp32_wokwi/sketch_improved/sketch_improved.ino` vào editor
+   - Copy `esp32_wokwi/sketch_improved/decision_tree_model.h` làm tab mới
+   - Copy `esp32_wokwi/diagram.json` làm circuit diagram
+   - Thêm thư viện **ArduinoJson** (v6.21+)
+   - Click **"Start Simulation"**
 
-4. **Run the simulation**
+4. **Chạy mô phỏng**
    ```cmd
    cd python_sim
-   run_sim.bat
+   python -m robocar_sim.main_waypoint
    ```
-   Or manually:
+   Hoặc chỉ định COM port:
    ```cmd
-   python -m robocar_sim.main
+   python -m robocar_sim.main_waypoint --port COM7
    ```
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
-hil-robotcar/
+HENhung/
 │
-├── 📄 README.md                      ← You are here
+├── README.md                              ← Tổng quan dự án
+├── QUICK_REFERENCE.md                     ← Quick start reference
+├── PROJECT_COMPLETION_CHECKLIST.md        ← Checklist hoàn thiện
 │
-├── 📂 docs/                          ← Documentation
-│   ├── ARCHITECTURE.md               ← System design
-│   ├── HOW_TO_RUN_WINDOWS.md         ← Setup guide
-│   ├── SERIAL_PROTOCOL.md            ← Communication spec
-│   ├── TROUBLESHOOTING.md            ← Common issues
-│   └── DEMO_CHECKLIST.md             ← Presentation prep
+├── docs/                                  ← Tài liệu kỹ thuật
+│   ├── ARCHITECTURE.md                    ← Kiến trúc hệ thống (v2.0)
+│   ├── SERIAL_PROTOCOL.md                 ← Giao thức Serial JSON
+│   ├── HOW_TO_RUN_WINDOWS.md              ← Hướng dẫn chạy trên Windows
+│   ├── WAYPOINT_NAVIGATION.md             ← Hệ thống điều hướng waypoint
+│   ├── DEMO_CHECKLIST.md                  ← Chuẩn bị demo
+│   └── TROUBLESHOOTING.md                 ← Xử lý lỗi thường gặp
 │
-├── 📂 esp32_wokwi/                   ← ESP32 Firmware
-│   ├── sketch.ino                    ← Controller logic (Arduino C++)
-│   ├── diagram.json                  ← Wokwi circuit diagram
-│   └── wokwi.toml                    ← Wokwi configuration
+├── esp32_wokwi/                           ← ESP32 Firmware
+│   ├── diagram.json                       ← Wokwi circuit diagram
+│   ├── wokwi.toml                         ← Wokwi configuration
+│   └── sketch_improved/                   ← Firmware v7.0
+│       ├── sketch_improved.ino            ← Main firmware (DT AI + FreeRTOS)
+│       ├── decision_tree_model.h          ← Trained Decision Tree (C header)
+│       └── README.md                      ← Firmware documentation
 │
-└── 📂 python_sim/                    ← Python Simulation
-    ├── run_sim.bat                   ← Windows launcher
-    ├── requirements.txt              ← Python dependencies
-    │
-    └── robocar_sim/                  ← Main simulation package
-        ├── main.py                   ← Main integration loop
-        │
-        ├── 📂 sim/                   ← Simulation engine
-        │   ├── world.py              ← World manager
-        │   ├── physics.py            ← Differential drive kinematics
-        │   ├── sensors.py            ← Raycast ultrasonic sensors
-        │   └── obstacles.py          ← Obstacle management
-        │
-        ├── 📂 io/                    ← Serial communication
-        │   ├── serial_bridge.py      ← Non-blocking serial I/O
-        │   └── protocol.py           ← JSON encoding/decoding
-        │
-        └── 📂 render/                ← Visualization
-            └── renderer.py           ← pygame 2D renderer
+├── python_sim/                            ← Python Simulation
+│   ├── requirements.txt                   ← Python dependencies
+│   ├── run_sim.bat                        ← Windows launcher
+│   ├── train_decision_tree.py             ← DT training script
+│   │
+│   └── robocar_sim/                       ← Simulation package
+│       ├── main_waypoint.py               ← Main entry point (waypoint mode)
+│       ├── main.py                        ← Legacy main (autopilot fallback)
+│       │
+│       ├── sim/                           ← Simulation engine
+│       │   ├── world.py                   ← World manager
+│       │   ├── physics.py                 ← 4WD skid-steer kinematics
+│       │   ├── sensors.py                 ← 9-beam raycast sensors
+│       │   ├── obstacles.py               ← Obstacle management
+│       │   ├── waypoints.py               ← Waypoint navigator
+│       │   └── autopilot.py               ← Safe-stop fallback
+│       │
+│       ├── io/                            ← Serial communication
+│       │   ├── serial_bridge.py           ← Non-blocking serial I/O
+│       │   └── protocol.py                ← JSON encoding/decoding
+│       │
+│       ├── render/                        ← Visualization
+│       │   └── renderer.py                ← pygame 2D renderer
+│       │
+│       └── scenarios/                     ← YAML scenario files
+│           ├── demo_waypoints.yaml        ← 5 waypoints hình vuông
+│           └── demo_avoid.yaml            ← Obstacle avoidance demo
+│
+└── BAO_CAO_DO_AN/                         ← Báo cáo đồ án
+    └── BAO_CAO_PART1_CHUONG1_2.md        ← Chương 1 & 2
 ```
 
 ---
 
-## 🎮 How It Works
+## How It Works
 
-### 1. **Simulation Loop** (Python - 50 Hz)
+### 1. Simulation Loop (Python – 50 Hz)
 ```python
 while running:
-    # 1. Get sensor data from simulation
-    dF, dL, dR = world.get_sensor_data()
-    
-    # 2. Send to ESP32 via Serial
-    serial.send_sensor_data(dF, dL, dR)
-    
-    # 3. Receive motor commands from ESP32
-    vL, vR = serial.receive_motor_commands()
-    
-    # 4. Update physics
+    # 1. Get 9-sensor data + robot state from simulation
+    sensor_data = world.get_sensor_data()  # d[9]
+
+    # 2. Send to ESP32 via Serial JSON
+    serial.send({"t": ms, "x": x, "y": y, "th": th,
+                 "wpX": wpX, "wpY": wpY, "d": [9 floats]})
+
+    # 3. Receive motor commands + AI telemetry
+    response = serial.receive()  # {"vL", "vR", "mode", "ai_a", ...}
+
+    # 4. Update 4WD physics
     world.set_motor_commands(vL, vR)
     world.update(dt)
-    
-    # 5. Render frame
+
+    # 5. Render frame (60 FPS)
     renderer.render_frame(...)
 ```
 
-### 2. **Controller Loop** (ESP32 - 50 Hz)
-```cpp
-void loop() {
-    // 1. Read sensor data from Serial
-    readSensorData();  // {"dF": 1.2, "dL": 0.8, "dR": 2.1}
-    
-    // 2. Run obstacle avoidance logic
-    obstacleAvoidanceController();
-    
-    // 3. Send motor commands to Serial
-    sendMotorCommands();  // {"vL": 0.6, "vR": 0.7}
-}
+### 2. ESP32 Controller (FreeRTOS Dual-Core)
+```
+Core 1 – controlTask @ 50 Hz:
+  Read serial → Apply safety rules → Blend DT + waypoint → Send motor commands
+
+Core 0 – aiTask @ 5 Hz:
+  Read 9 sensors → Decision Tree inference → Update action + speed
 ```
 
-### 3. **Serial Protocol** (JSON - 115200 baud)
+### 3. Serial Protocol (JSON @ 115200 baud)
 
 **Python → ESP32:**
 ```json
-{"dF": 1.25, "dL": 0.85, "dR": 2.10}
+{"t": 12345, "x": 2.1, "y": 1.9, "th": 0.52, "wpX": 6.0, "wpY": 4.0, "d": [2.0,1.4,1.2,0.9,0.7,1.0,1.3,1.6,2.2]}
 ```
-- `dF` = Front sensor distance (meters)
-- `dL` = Left sensor distance (meters)  
-- `dR` = Right sensor distance (meters)
 
 **ESP32 → Python:**
 ```json
-{"vL": 0.65, "vR": 0.70}
+{"t": 12350, "vL": 0.22, "vR": 0.28, "mode": "FOLLOW", "ai_a": 1, "ai_s": 0.86, "ai_ms": 0.31}
 ```
-- `vL` = Left wheel velocity (-1.0 to 1.0)
-- `vR` = Right wheel velocity (-1.0 to 1.0)
+
+Chi tiết: [docs/SERIAL_PROTOCOL.md](docs/SERIAL_PROTOCOL.md)
 
 ---
 
-## 🎨 Visualization
+## Visualization
 
-The pygame window displays:
-
-- 🔵 **Blue circle** - Robot car
-- ⚪ **Gray circles** - Obstacles
-- 📏 **Green/Orange/Red rays** - Ultrasonic sensors
-  - 🟢 Green = Safe distance (> 0.6m)
-  - 🟠 Orange = Warning (0.3-0.6m)
-  - 🔴 Red = Danger (< 0.3m)
-- 🎯 **Yellow line** - Car heading direction
-- 📊 **HUD** - Real-time telemetry
-
----
-
-## 🧪 Testing & Validation
-
-### Obstacle Avoidance Behavior
-The ESP32 controller implements:
-1. **Emergency stop** if obstacle < 15cm ahead
-2. **Turn away** if obstacle < 30cm ahead (toward open space)
-3. **Veer left/right** if obstacles on sides
-4. **Move forward** if no obstacles
-
-### Expected Results
-- ✅ Car navigates through obstacle field
-- ✅ No collisions in normal operation
-- ✅ Smooth turning behavior
-- ✅ Real-time response (< 50ms latency)
+Cửa sổ pygame hiển thị:
+- **Robot 4WD** – Xe với 4 bánh, hướng di chuyển
+- **Obstacles** – Vật cản hình tròn
+- **9 Sensor rays** – Mã màu theo khoảng cách:
+  - 🟢 Green = Safe (> 1.0m)
+  - 🟡 Yellow = Warning (0.6–1.0m)
+  - 🟠 Orange = Danger (0.3–0.6m)
+  - 🔴 Red = Critical (< 0.3m)
+- **Waypoint path** – Lộ trình và điểm đích hiện tại
+- **HUD** – Telemetry real-time (speed, mode, waypoint progress, AI action)
 
 ---
 
-## 📚 Documentation
+## Obstacle Avoidance (AI)
 
-| Document | Description |
-|----------|-------------|
-| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | System design and component details |
-| [HOW_TO_RUN_WINDOWS.md](docs/HOW_TO_RUN_WINDOWS.md) | Complete setup guide for Windows |
-| [SERIAL_PROTOCOL.md](docs/SERIAL_PROTOCOL.md) | Communication protocol specification |
-| [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Common issues and solutions |
-| [DEMO_CHECKLIST.md](docs/DEMO_CHECKLIST.md) | Presentation preparation checklist |
+ESP32 sử dụng Decision-Tree AI với 4 behavior modes:
+
+| Mode | Điều kiện | Hành vi |
+|------|----------|---------|
+| `FOLLOW` | front > 1.30m | DT + waypoint blending |
+| `AVOID` | front < 0.90m | DT override, high avoid weight |
+| `STOP` | front < 0.40m | Emergency stop / reverse |
+| `RECOVERY` | Stuck detected | Reverse + spin |
+
+Safety distances:
+- `kDStop = 0.40m` – Full stop/reverse
+- `kDCritical = 0.55m` – 100% DT override
+- `kDDanger = 0.90m` – Switch to AVOID mode
+- `kDWarn = 1.30m` – Blend starts
+- `kDClear = 1.50m` – Exit AVOID (hysteresis)
 
 ---
 
-## 🛠️ Technologies Used
+## Documentation
 
-### Hardware/Firmware
-- **ESP32** - Microcontroller (Wokwi virtual)
-- **Arduino IDE** - Firmware development
-- **ArduinoJson** - JSON parsing library
+| Tài Liệu | Mô Tả |
+|----------|--------|
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Kiến trúc hệ thống chi tiết (v2.0) |
+| [docs/SERIAL_PROTOCOL.md](docs/SERIAL_PROTOCOL.md) | Đặc tả giao thức Serial JSON |
+| [docs/HOW_TO_RUN_WINDOWS.md](docs/HOW_TO_RUN_WINDOWS.md) | Hướng dẫn setup & chạy trên Windows |
+| [docs/WAYPOINT_NAVIGATION.md](docs/WAYPOINT_NAVIGATION.md) | Hệ thống điều hướng waypoint |
+| [docs/DEMO_CHECKLIST.md](docs/DEMO_CHECKLIST.md) | Checklist chuẩn bị báo cáo/demo |
+| [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Xử lý lỗi thường gặp |
 
-### Software
-- **Python 3.10+** - Simulation engine
-- **pygame 2.5+** - Graphics and rendering
-- **pyserial 3.5+** - Serial communication
-- **ArduinoJson 6.21+** - JSON protocol
+---
 
-### Concepts
+## Technologies
+
+### Firmware
+- **ESP32** (Wokwi virtual / real HW)
+- **Arduino C++** + FreeRTOS dual-core
+- **ArduinoJson 6.21+**
+- **Decision Tree** (scikit-learn → C header export)
+
+### Simulation
+- **Python 3.10+**
+- **pygame 2.5+** – Graphics rendering
+- **pyserial 3.5+** – Serial communication
+- **PyYAML 6.0+** – Scenario config
+- **scikit-learn** – DT model training
+
+### Key Concepts
 - Hardware-in-the-Loop (HIL) testing
-- Differential drive kinematics
+- 4WD Skid-steer kinematics
 - Raycast-based sensor simulation
-- Real-time embedded systems
-- Serial communication protocols
+- Decision-Tree AI inference on embedded
+- FreeRTOS multi-core task scheduling
+- Real-time serial JSON protocol
 
 ---
 
-## 🎓 Academic Use
+## Vehicle Parameters
 
-This project is designed for:
-- ✅ Embedded systems courses
-- ✅ Robotics labs
-- ✅ Control systems demonstrations
-- ✅ HIL methodology teaching
-- ✅ Senior design projects
-
-### Learning Objectives
-Students will learn:
-1. HIL system architecture
-2. Real-time communication protocols
-3. Embedded control algorithms
-4. Physics simulation techniques
-5. System integration and testing
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| Track width | 0.22 m | Left↔right wheel distance |
+| Wheel base | 0.16 m | Front↔rear axle distance |
+| Max speed | 0.60 m/s | Maximum linear wheel speed |
+| Wheel radius | 0.033 m | Wheel radius |
+| Lateral friction | 0.85 | Skid-steer scrub factor |
+| Sensor count | 9 | Ultrasonic sensor array |
+| Sensor max range | 3.0 m | Maximum detection range |
+| World size | 12 × 12 m | Simulation world |
 
 ---
 
-## 🐛 Troubleshooting
+## Troubleshooting
 
-### Common Issues
+**Không kết nối được ESP32?**
+- Chạy Wokwi simulation trước
+- Mở Serial Monitor trong Wokwi
+- Chỉ định port thủ công: `python -m robocar_sim.main_waypoint --port COM7`
 
-**❌ "Could not auto-detect ESP32 port"**
-- Run Wokwi simulation first
-- Check Serial Monitor is open in Wokwi
-- Manually specify port: `python -m robocar_sim.main COM4`
-
-**❌ "ModuleNotFoundError: pygame"**
+**ModuleNotFoundError?**
 ```cmd
-pip install pygame pyserial pyyaml
+pip install pygame pyserial pyyaml scikit-learn
 ```
 
-**❌ Car doesn't move**
-- Check ESP32 Serial Monitor shows motor commands
-- Verify "ESP32: CONNECTED" in Python HUD
-- Check Wokwi simulation is running
+**Xe không di chuyển?**
+- Kiểm tra HUD hiển thị "ESP32: CONNECTED"
+- Kiểm tra Wokwi Serial Monitor có motor commands
+- Kiểm tra Wokwi simulation đang chạy
 
-**❌ High latency / Lag**
-- Close other programs using COM port
-- Reduce rendering FPS: `target_fps=30`
-- Check CPU usage
-
-See [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for more.
+Xem thêm: [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)
 
 ---
 
-## 🚧 Future Enhancements
-
-Potential extensions:
-- [ ] Waypoint navigation mode
-- [ ] Path planning algorithms (A*, RRT)
-- [ ] Multiple robot support
-- [ ] Configurable obstacle courses
-- [ ] Data logging and replay
-- [ ] Performance metrics dashboard
-- [ ] IMU sensor simulation
-- [ ] PID velocity control
-
----
-
-## 📜 License
-
-This project is open-source for academic and educational purposes.
-
----
-
-## 👥 Contributors
-
-- **Your Name** - Initial development
-- **Your University** - Academic supervision
-
----
-
-## 🙏 Acknowledgments
-
-- Wokwi team for excellent ESP32 simulation platform
-- pygame community for graphics library
-- ArduinoJson for efficient JSON parsing
-
----
-
-## 📞 Contact
-
-For questions or support:
-- 📧 Email: your.email@example.com
-- 🌐 GitHub: https://github.com/yourusername/hil-robotcar
-
----
-
-## ⭐ Sử dụng cho học tập!
-
-Dự án này được thiết kế cho môn Hệ Nhúng - đề tài **Robocar 4 bánh tự hành** với waypoint navigation và obstacle avoidance thông minh.
-
----
-
-**Group 10 - Hệ Nhúng 1-2-25-N02 - 2025**
+**Group 10 – Hệ Nhúng 1-2-25-N02 – 2025**
 
